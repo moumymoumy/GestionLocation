@@ -1362,6 +1362,74 @@ function exportJSON(reservations) {
   URL.revokeObjectURL(url);
 }
 
+/* ============================= INSTALLATION PWA ============================= */
+
+function InstallButton() {
+  const [deferredPrompt, setDeferredPrompt] = useState(null);
+  const [isInstalled, setIsInstalled] = useState(false);
+  const [showInstructions, setShowInstructions] = useState(false);
+
+  useEffect(() => {
+    const standaloneMql = window.matchMedia('(display-mode: standalone)');
+    if (standaloneMql.matches || window.navigator.standalone) setIsInstalled(true);
+
+    function handleBeforeInstallPrompt(e) {
+      e.preventDefault();
+      setDeferredPrompt(e);
+    }
+    function handleAppInstalled() {
+      setIsInstalled(true);
+      setDeferredPrompt(null);
+    }
+    window.addEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
+    window.addEventListener('appinstalled', handleAppInstalled);
+    return () => {
+      window.removeEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
+      window.removeEventListener('appinstalled', handleAppInstalled);
+    };
+  }, []);
+
+  async function handleClick() {
+    if (deferredPrompt) {
+      await deferredPrompt.prompt();
+      const choice = await deferredPrompt.userChoice;
+      if (choice.outcome === 'accepted') setIsInstalled(true);
+      setDeferredPrompt(null);
+    } else {
+      setShowInstructions(true);
+    }
+  }
+
+  if (isInstalled) return null;
+
+  return (
+    <>
+      <button onClick={handleClick} className="toolbtn px-3 py-1.5 rounded border border-white/30 text-white text-xs font-medium hover:bg-white/10">
+        📲 Installer l'application
+      </button>
+      {showInstructions && (
+        <Modal onClose={() => setShowInstructions(false)} title="Installer l'application">
+          <div className="space-y-3 text-sm text-inktext">
+            <p className="text-muted">L'installation automatique n'est pas disponible ici. Essayez :</p>
+            <div className="rounded bg-paperdark p-3">
+              <p className="font-medium mb-1">Sur iPhone / iPad (Safari) :</p>
+              <p className="text-muted">Icône Partager (carré + flèche) → « Sur l'écran d'accueil »</p>
+            </div>
+            <div className="rounded bg-paperdark p-3">
+              <p className="font-medium mb-1">Sur ordinateur (Chrome / Edge) :</p>
+              <p className="text-muted">Icône d'installation ⊕ dans la barre d'adresse, ou menu ⋮ → « Installer l'application »</p>
+            </div>
+            <div className="rounded bg-paperdark p-3">
+              <p className="font-medium mb-1">Sur Android (Chrome) :</p>
+              <p className="text-muted">Menu ⋮ → « Ajouter à l'écran d'accueil »</p>
+            </div>
+          </div>
+        </Modal>
+      )}
+    </>
+  );
+}
+
 /* ============================= SYNCHRONISATION — VUE ============================= */
 
 function SyncView({ teamSession, onTeamJoined, onLeaveTeam, activityLog, syncing, syncError }) {
@@ -1845,12 +1913,15 @@ function App() {
             <div className="font-display text-2xl font-semibold tracking-wide">Registre</div>
             <div className="text-xs text-white/70">Réservations de locaux & matériel — gestion manuelle</div>
           </div>
-          {teamSession && (
-            <div className="text-xs text-white/80 text-right">
-              <div>{teamSession.teamName}</div>
-              <div>{teamSession.prenom} · {teamSession.role === 'edit' ? 'modification' : 'consultation seule'}</div>
-            </div>
-          )}
+          <div className="flex items-center gap-3">
+            <InstallButton />
+            {teamSession && (
+              <div className="text-xs text-white/80 text-right">
+                <div>{teamSession.teamName}</div>
+                <div>{teamSession.prenom} · {teamSession.role === 'edit' ? 'modification' : 'consultation seule'}</div>
+              </div>
+            )}
+          </div>
         </div>
       </div>
 
