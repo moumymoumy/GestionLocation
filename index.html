@@ -1528,14 +1528,17 @@ function SyncView({ teamSession, onTeamJoined, onLeaveTeam, activityLog, syncing
             Cet appareil n'est relié à aucune équipe. Les données restent alors uniquement sur cet
             appareil (circuit fermé).
           </p>
-          <div className="flex flex-col sm:flex-row gap-3 justify-center">
-            <button onClick={() => setMode('create')} className="toolbtn px-4 py-2.5 rounded bg-ink text-white font-medium">
-              Créer une équipe
-            </button>
-            <button onClick={() => setMode('join')} className="toolbtn px-4 py-2.5 rounded border border-paperdark font-medium">
-              Rejoindre une équipe
+          <div className="flex justify-center">
+            <button onClick={() => setMode('join')} className="toolbtn px-6 py-2.5 rounded bg-ink text-white font-medium">
+              Rejoindre une équipe avec un code
             </button>
           </div>
+          <p className="text-xs text-muted pt-2 border-t border-paperdark/60">
+            Vous êtes responsable de cette application ?{' '}
+            <button onClick={() => setMode('create')} className="underline hover:text-ink">
+              Créer une nouvelle équipe
+            </button>
+          </p>
         </div>
       )}
 
