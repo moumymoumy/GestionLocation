@@ -1,0 +1,1941 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Registre — Réservations ASBL</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:wght@400;600;700&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone@7/babel.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#1B3A4B">
+<link rel="apple-touch-icon" href="icon-192.png">
+<script>
+  /* ===================================================================
+     CONFIGURATION SYNCHRONISATION — à renseigner avant chaque déploiement
+     =================================================================== */
+  window.SUPABASE_URL = "https://gfpqwigfhbnvlhctnmxr.supabase.co";
+  window.SUPABASE_ANON_KEY = "sb_publishable_x329McO5udm-w_04xqQmFg_ZFijAfrD";
+  window.ADMIN_PASSWORD = "8uym9vhaug5f8j";
+</script>
+<script>
+  tailwind.config = {
+    theme: {
+      extend: {
+        colors: {
+          ink: '#1B3A4B',
+          inkdark: '#122A37',
+          paper: '#EEF1EF',
+          paperdark: '#E2E7E2',
+          card: '#FBFCFB',
+          amber: '#D98E2B',
+          amberdark: '#B9761E',
+          forest: '#2F6E4F',
+          forestdark: '#245939',
+          brick: '#B94A3D',
+          inktext: '#23303A',
+          muted: '#6B7B80',
+        },
+        fontFamily: {
+          display: ['Fraunces', 'serif'],
+          body: ['Inter', 'sans-serif'],
+          mono: ['"IBM Plex Mono"', 'monospace'],
+        },
+      },
+    },
+  };
+</script>
+<style>
+  html, body { background: #E2E7E2; }
+  body { font-family: 'Inter', sans-serif; }
+  .font-display { font-family: 'Fraunces', serif; }
+  .font-mono { font-family: 'IBM Plex Mono', monospace; }
+
+  .ledger-tab { position: relative; transition: transform .15s ease, background .15s ease; }
+  .ledger-tab.active { background: #FBFCFB; transform: translateY(1px); }
+  .ledger-tab.active::after { content: ''; position: absolute; left: 0; right: 0; bottom: -1px; height: 3px; background: #FBFCFB; }
+
+  .receipt { background: #FBFCFB; position: relative; box-shadow: 0 1px 2px rgba(27,58,75,0.06), 0 8px 24px -12px rgba(27,58,75,0.25); }
+  .receipt::after {
+    content: ''; position: absolute; left: 0; right: 0; bottom: -11px; height: 22px;
+    background: linear-gradient(-45deg, #E2E7E2 8px, transparent 0), linear-gradient(45deg, #E2E7E2 8px, transparent 0);
+    background-size: 16px 22px; background-repeat: repeat-x; background-position: bottom;
+  }
+  .receipt-dashed { border-top: 1px dashed #C7CFC9; }
+  ::-webkit-scrollbar { width: 8px; height: 8px; }
+  ::-webkit-scrollbar-thumb { background: #C7CFC9; border-radius: 4px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  .chip { transition: all .12s ease; }
+  input[type="checkbox"].sq, input[type="radio"].sq { accent-color: #1B3A4B; }
+  .toolbtn { transition: all .12s ease; }
+</style>
+</head>
+<body class="text-inktext">
+<div id="root"></div>
+
+<script type="text/babel" data-presets="react">
+const { useState, useMemo, useEffect, useRef } = React;
+
+/* ============================= CONSTANTES ============================= */
+
+const LOCAUX = [
+  { id: 'rdc', name: 'Rez-de-chaussée' },
+  { id: 'autre', name: 'Autre Local' },
+];
+
+const ACCORDAGE_PRICE = 120;
+
+const EQUIPEMENT_CATALOG = [
+  { id: 'piano1', name: 'Piano droit', icon: '🎹', defaultPrice: 15, defaultCaution: 50, type: 'materiel', hasAccordage: true },
+  { id: 'piano2', name: 'Piano à queue', icon: '🎹', defaultPrice: 15, defaultCaution: 80, type: 'materiel', hasAccordage: true },
+  { id: 'sono', name: 'Petite Sono (baffles, micros, spots)', icon: '🔊', defaultPrice: 25, defaultCaution: 50, type: 'materiel' },
+  { id: 'instruments', name: 'Instruments de musique', icon: '🎻', defaultPrice: 10, defaultCaution: 20, type: 'materiel' },
+  { id: 'technicien', name: 'Technicien', icon: '🧑‍🔧', defaultPrice: 20, defaultCaution: 0, type: 'materiel', isHourly: true, hourlyRate: 20, noCaution: true },
+];
+
+const JOURS = ['Lun', 'Mar', 'Mer', 'Jeu', 'Ven', 'Sam', 'Dim'];
+const JOURS_LONG = ['Lundi', 'Mardi', 'Mercredi', 'Jeudi', 'Vendredi', 'Samedi', 'Dimanche'];
+const MOIS_LONG = ['Janvier','Février','Mars','Avril','Mai','Juin','Juillet','Août','Septembre','Octobre','Novembre','Décembre'];
+
+const TARIFF_LABELS = { heure: '/ heure', jour: '/ jour', semaine: '/ semaine', mois: '/ mois' };
+
+/* Horaires d'ouverture */
+const HORAIRE_MIN = '09:00';
+const HORAIRE_MAX = '22:00';
+const MAX_HEURES_PAR_JOUR = 13; // 9h -> 22h
+const MIN_HEURES_TARIF_HORAIRE = 2;
+const ESPACEMENT_MIN_MINUTES = 15;
+
+/* Tarifs fixes */
+const TARIF_HORAIRE_BASE = 20;
+const TARIF_JOUR = 195;
+const TARIF_SEMAINE = 975;
+const TARIF_MOIS = 3450;
+
+function computeUnitPriceForTariff(tariffType) {
+  switch (tariffType) {
+    case 'heure': return TARIF_HORAIRE_BASE;
+    case 'jour': return TARIF_JOUR;
+    case 'semaine': return TARIF_SEMAINE;
+    case 'mois': return TARIF_MOIS;
+    default: return TARIF_HORAIRE_BASE;
+  }
+}
+
+function generateTimeOptions(min, max, stepMinutes) {
+  const opts = [];
+  const [h1, m1] = min.split(':').map(Number);
+  const [h2, m2] = max.split(':').map(Number);
+  let cur = h1 * 60 + m1;
+  const end = h2 * 60 + m2;
+  while (cur <= end) {
+    opts.push(`${String(Math.floor(cur / 60)).padStart(2, '0')}:${String(cur % 60).padStart(2, '0')}`);
+    cur += stepMinutes;
+  }
+  return opts;
+}
+const TIME_OPTIONS = generateTimeOptions(HORAIRE_MIN, HORAIRE_MAX, 15);
+
+const DEFAULT_DISCOUNTS = { heure: 0, jour: 5, semaine: 10, mois: 15 };
+
+const STORAGE_KEY = 'asbl-registre-reservations-v1';
+const TEAM_SESSION_KEY = 'asbl-registre-team-session-v1';
+const FS_SUPPORTED = typeof window.showSaveFilePicker === 'function';
+
+/* ============================= SYNCHRONISATION (équipes, rôles, journal) ============================= */
+
+const supabaseClient = (window.SUPABASE_URL && window.SUPABASE_ANON_KEY && window.SUPABASE_URL.startsWith('http'))
+  ? window.supabase.createClient(window.SUPABASE_URL, window.SUPABASE_ANON_KEY)
+  : null;
+
+function generateTeamCode() {
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // sans caractères ambigus (0/O, 1/I)
+  let out = '';
+  for (let i = 0; i < 8; i++) out += chars[Math.floor(Math.random() * chars.length)];
+  return out.slice(0, 4) + '-' + out.slice(4);
+}
+
+function loadTeamSession() {
+  try {
+    const raw = localStorage.getItem(TEAM_SESSION_KEY);
+    if (raw) return JSON.parse(raw);
+  } catch (e) {}
+  return null;
+}
+function saveTeamSession(session) {
+  try {
+    if (session) localStorage.setItem(TEAM_SESSION_KEY, JSON.stringify(session));
+    else localStorage.removeItem(TEAM_SESSION_KEY);
+  } catch (e) {}
+}
+
+async function createTeamOnServer(teamName, prenom) {
+  const editCode = generateTeamCode();
+  const viewCode = generateTeamCode();
+  const { data: team, error } = await supabaseClient
+    .from('teams')
+    .insert({ name: teamName || 'Équipe', edit_code: editCode, view_code: viewCode, created_by: prenom })
+    .select()
+    .single();
+  if (error) throw error;
+  return team;
+}
+
+async function findTeamByCode(code) {
+  const cleanCode = code.trim().toUpperCase();
+  const { data: byEdit } = await supabaseClient.from('teams').select('*').eq('edit_code', cleanCode).maybeSingle();
+  if (byEdit) return { team: byEdit, role: 'edit' };
+  const { data: byView } = await supabaseClient.from('teams').select('*').eq('view_code', cleanCode).maybeSingle();
+  if (byView) return { team: byView, role: 'view' };
+  return null;
+}
+
+async function fetchTeamData(teamId) {
+  const { data, error } = await supabaseClient.from('team_data').select('*').eq('team_id', teamId).maybeSingle();
+  if (error) throw error;
+  return data;
+}
+
+async function pushTeamData(teamId, reservations, prenom) {
+  const { error } = await supabaseClient
+    .from('team_data')
+    .upsert({ team_id: teamId, data: reservations, updated_by: prenom }, { onConflict: 'team_id' });
+  if (error) throw error;
+}
+
+async function pushActivityLog(teamId, prenom, description) {
+  try {
+    await supabaseClient.from('activity_log').insert({ team_id: teamId, author_name: prenom, description });
+  } catch (e) {}
+}
+
+async function fetchActivityLog(teamId) {
+  const { data } = await supabaseClient
+    .from('activity_log')
+    .select('*')
+    .eq('team_id', teamId)
+    .order('created_at', { ascending: false })
+    .limit(15);
+  return data || [];
+}
+
+function describeReservationsDiff(prev, next) {
+  if (!prev) return 'a initialisé le registre';
+  if (next.length > prev.length) return `a ajouté ${next.length - prev.length} réservation(s)`;
+  if (next.length < prev.length) return `a supprimé ${prev.length - next.length} réservation(s)`;
+  return 'a modifié une réservation';
+}
+
+
+
+/* ============================= UTILITAIRES DATES ============================= */
+
+const jsDayToOurIndex = (d) => (d === 0 ? 6 : d - 1);
+
+function parseISO(dateStr) {
+  const [y, m, d] = dateStr.split('-').map(Number);
+  return new Date(y, m - 1, d);
+}
+function toISO(date) {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, '0');
+  const d = String(date.getDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+}
+function addDays(date, n) { const d2 = new Date(date); d2.setDate(d2.getDate() + n); return d2; }
+function addMonths(date, n) { const d2 = new Date(date); d2.setMonth(d2.getMonth() + n); return d2; }
+function formatDateFR(dateStr) {
+  const d = parseISO(dateStr);
+  return d.toLocaleDateString('fr-BE', { weekday: 'short', day: '2-digit', month: 'short', year: 'numeric' });
+}
+function toMin(t) { const [h, m] = t.split(':').map(Number); return h * 60 + m; }
+function hoursBetween(start, end) { return Math.max(0, (toMin(end) - toMin(start)) / 60); }
+function uid() { return Math.random().toString(36).slice(2, 10) + Date.now().toString(36).slice(-4); }
+function escapeHtml(s) { return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
+
+function generateRecurrentOccurrences({ weekdays, startDate, durationValue, durationUnit, startTime, endTime }) {
+  if (!startDate || !weekdays.length || !durationValue) return [];
+  const start = parseISO(startDate);
+  let end;
+  if (durationUnit === 'mois') end = addDays(addMonths(start, Number(durationValue)), -1);
+  else end = addDays(start, Number(durationValue) * 7 - 1);
+  const occurrences = [];
+  let cur = new Date(start);
+  let guard = 0;
+  while (cur <= end && guard < 2000) {
+    const idx = jsDayToOurIndex(cur.getDay());
+    if (weekdays.includes(idx)) occurrences.push({ date: toISO(cur), start: startTime, end: endTime });
+    cur = addDays(cur, 1);
+    guard++;
+  }
+  return occurrences;
+}
+
+function occurrencesFromRange(row) {
+  if (!row.dateDebut || !row.start || !row.end) return [];
+  const start = parseISO(row.dateDebut);
+  let end = row.dateFin ? parseISO(row.dateFin) : start;
+  if (end < start) end = start;
+  const occ = [];
+  let cur = new Date(start);
+  let guard = 0;
+  while (cur <= end && guard < 370) {
+    occ.push({ date: toISO(cur), start: row.start, end: row.end });
+    cur = addDays(cur, 1);
+    guard++;
+  }
+  return occ;
+}
+
+function distinctWeeksCount(occurrences) {
+  const set = new Set();
+  occurrences.forEach((o) => {
+    const d = parseISO(o.date);
+    const monday = addDays(d, -jsDayToOurIndex(d.getDay()));
+    set.add(toISO(monday));
+  });
+  return set.size;
+}
+function distinctMonthsCount(occurrences) {
+  const set = new Set();
+  occurrences.forEach((o) => set.add(o.date.slice(0, 7)));
+  return set.size;
+}
+function computeTotalHours(occurrences) {
+  return occurrences.reduce((s, o) => s + hoursBetween(o.start, o.end), 0);
+}
+
+function suggestedQuantity(tariffType, occurrences, recurrence) {
+  if (!occurrences.length) return 0;
+  switch (tariffType) {
+    case 'heure': return Math.round(computeTotalHours(occurrences) * 100) / 100;
+    case 'jour': return occurrences.length;
+    case 'semaine':
+      if (recurrence && recurrence.type === 'recurrent' && recurrence.durationUnit === 'semaines') return Number(recurrence.durationValue);
+      return distinctWeeksCount(occurrences);
+    case 'mois':
+      if (recurrence && recurrence.type === 'recurrent' && recurrence.durationUnit === 'mois') return Number(recurrence.durationValue);
+      return distinctMonthsCount(occurrences);
+    default: return 0;
+  }
+}
+
+function euro(n) {
+  return (Math.round((n + Number.EPSILON) * 100) / 100).toLocaleString('fr-BE', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+/* ============================= VALIDATION HORAIRES ============================= */
+
+function validateOccurrences(occurrences, tariffType) {
+  const errors = new Set();
+  occurrences.forEach((o) => {
+    if (o.start < HORAIRE_MIN || o.end > HORAIRE_MAX) {
+      errors.add(`Horaire hors plage d'ouverture (${HORAIRE_MIN}–${HORAIRE_MAX}, fermeture à 22h).`);
+    }
+    const h = hoursBetween(o.start, o.end);
+    if (h > MAX_HEURES_PAR_JOUR) errors.add(`Durée maximale de ${MAX_HEURES_PAR_JOUR}h par jour dépassée.`);
+    if (tariffType === 'heure' && h < MIN_HEURES_TARIF_HORAIRE && h > 0) {
+      errors.add(`Location à l'heure : minimum ${MIN_HEURES_TARIF_HORAIRE}h par créneau.`);
+    }
+  });
+  return Array.from(errors);
+}
+
+/* ============================= CONFLITS (règle des 15 minutes) ============================= */
+
+function intervalGapMinutes(s1, e1, s2, e2) {
+  const a1 = toMin(s1), b1 = toMin(e1), a2 = toMin(s2), b2 = toMin(e2);
+  if (a1 < b2 && a2 < b1) return -1; // chevauchement
+  if (b1 <= a2) return a2 - b1;
+  return a1 - b2;
+}
+
+function findScheduleConflicts(newRes, allReservations, excludeId) {
+  const conflicts = [];
+  const newClient = (newRes.clientName || '').trim().toLowerCase();
+  allReservations.forEach((res) => {
+    if (res.id === excludeId) return;
+    const sameClient = newClient && res.clientName.trim().toLowerCase() === newClient;
+    if (sameClient) return;
+    const sameLocal = res.local === newRes.local;
+    const sharedEquip = res.equipement.filter((e) => newRes.equipement.some((ne) => ne.id === e.id));
+    if (!sameLocal && sharedEquip.length === 0) return;
+    newRes.occurrences.forEach((occA) => {
+      res.occurrences.forEach((occB) => {
+        if (occA.date !== occB.date) return;
+        const gap = intervalGapMinutes(occA.start, occA.end, occB.start, occB.end);
+        if (gap < ESPACEMENT_MIN_MINUTES) {
+          const label = gap < 0 ? 'chevauchement horaire' : `${ESPACEMENT_MIN_MINUTES} min d'écart requises (${gap} min seulement)`;
+          if (sameLocal) conflicts.push({ date: occA.date, with: res.clientName, what: LOCAUX.find((l) => l.id === res.local).name, reason: label });
+          sharedEquip.forEach((eq) => conflicts.push({ date: occA.date, with: res.clientName, what: eq.name, reason: label }));
+        }
+      });
+    });
+  });
+  return conflicts;
+}
+
+/* ============================= CALCULS FINANCIERS ============================= */
+
+function resBase(res) { return res.unitPrice * res.quantity; }
+function resDiscountAmount(res) { return resBase(res) * ((res.discountPercent || 0) / 100); }
+function resEquip(res) { return res.equipement.reduce((s, e) => s + e.price, 0); }
+function resCaution(res) { return res.equipement.reduce((s, e) => s + (e.caution || 0), 0); }
+function resSubtotalHT(res) { return resBase(res) - resDiscountAmount(res) + resEquip(res) + resCaution(res); }
+function resTvaAmount(res) { return resSubtotalHT(res) * ((res.tvaPercent || 0) / 100); }
+function resTotal(res) { return resSubtotalHT(res) + resTvaAmount(res); }
+
+/* ============================= DONNÉES DE DÉMARRAGE (fictives, 1er lancement uniquement) ============================= */
+
+function buildSeedReservations() {
+  const r1Occ = generateRecurrentOccurrences({
+    weekdays: [0], startDate: '2026-07-06', durationValue: 1, durationUnit: 'mois', startTime: '18:00', endTime: '20:00',
+  });
+  return [
+    {
+      id: uid(),
+      clientName: 'Mme Dupont — Cours de piano (exemple)',
+      local: 'rdc',
+      scheduleType: 'recurrent',
+      recurrence: { weekdays: [0], startDate: '2026-07-06', durationValue: 1, durationUnit: 'mois', startTime: '18:00', endTime: '20:00' },
+      ponctuelDates: [],
+      occurrences: r1Occ,
+      tariffType: 'heure',
+      unitPrice: 20,
+      quantity: suggestedQuantity('heure', r1Occ, { type: 'recurrent', durationUnit: 'mois' }),
+      discountPercent: 0,
+      tvaPercent: 0,
+      equipement: [{ id: 'piano1', name: 'Piano droit', type: 'materiel', price: 15, cautionOn: true, caution: 50 }],
+      paymentStatus: 'paye',
+      notes: "Exemple fourni pour tester l'application — modifiable ou supprimable librement.",
+      createdAt: Date.now() - 500000,
+    },
+  ];
+}
+
+/* ============================= STOCKAGE : IndexedDB (handle fichier) ============================= */
+
+function idbOpen() {
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open('asbl-registre-db', 1);
+    req.onupgradeneeded = () => { req.result.createObjectStore('handles'); };
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+}
+async function idbSet(key, value) {
+  const db = await idbOpen();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction('handles', 'readwrite');
+    tx.objectStore('handles').put(value, key);
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  });
+}
+async function idbGet(key) {
+  const db = await idbOpen();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction('handles', 'readonly');
+    const req = tx.objectStore('handles').get(key);
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+}
+async function writeReservationsToFile(handle, data) {
+  try {
+    const writable = await handle.createWritable();
+    await writable.write(JSON.stringify(data, null, 2));
+    await writable.close();
+    return true;
+  } catch (e) { return false; }
+}
+
+/* ============================= PETITS COMPOSANTS ============================= */
+
+function Badge({ children, tone = 'ink' }) {
+  const tones = {
+    ink: 'bg-ink/10 text-ink', amber: 'bg-amber/15 text-amberdark', forest: 'bg-forest/15 text-forestdark',
+    brick: 'bg-brick/15 text-brick', muted: 'bg-paperdark text-muted',
+  };
+  return <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium whitespace-nowrap ${tones[tone]}`}>{children}</span>;
+}
+function PaymentBadge({ status }) {
+  return status === 'paye' ? <Badge tone="forest">● Payé — bloqué</Badge> : <Badge tone="amber">● En attente</Badge>;
+}
+function LocalBadge({ localId }) {
+  const l = LOCAUX.find((x) => x.id === localId);
+  return <Badge tone={localId === 'rdc' ? 'ink' : 'muted'}>{l ? l.name : localId}</Badge>;
+}
+function SectionTitle({ eyebrow, title }) {
+  return (
+    <div className="mb-4">
+      {eyebrow && <div className="text-xs uppercase tracking-widest text-muted font-semibold mb-1">{eyebrow}</div>}
+      <h2 className="font-display text-2xl text-ink font-semibold">{title}</h2>
+    </div>
+  );
+}
+function Modal({ onClose, children, title }) {
+  return (
+    <div className="fixed inset-0 bg-inkdark/40 backdrop-blur-sm z-50 flex items-center justify-center p-4" onClick={onClose}>
+      <div className="bg-card rounded-lg shadow-2xl max-w-lg w-full max-h-[85vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center justify-between px-5 py-4 border-b border-paperdark sticky top-0 bg-card">
+          <h3 className="font-display text-lg font-semibold text-ink">{title}</h3>
+          <button onClick={onClose} className="text-muted hover:text-ink text-xl leading-none px-2">×</button>
+        </div>
+        <div className="p-5">{children}</div>
+      </div>
+    </div>
+  );
+}
+
+/* ============================= FORMULAIRE ============================= */
+
+function NewReservationForm({ reservations, onCreate }) {
+  const [clientName, setClientName] = useState('');
+  const [local, setLocal] = useState('rdc');
+  const [scheduleType, setScheduleType] = useState('ponctuel');
+
+  const [ponctuelDates, setPonctuelDates] = useState([{ dateDebut: '', dateFin: '', start: '14:00', end: '19:00' }]);
+
+  const [weekdays, setWeekdays] = useState([0]);
+  const [recStartDate, setRecStartDate] = useState('');
+  const [durationValue, setDurationValue] = useState(1);
+  const [durationUnit, setDurationUnit] = useState('mois');
+  const [recStart, setRecStart] = useState('18:00');
+  const [recEnd, setRecEnd] = useState('20:00');
+
+  const [tariffType, setTariffType] = useState('heure');
+  const [unitPrice, setUnitPrice] = useState('20');
+  const [quantityOverride, setQuantityOverride] = useState(null);
+  const [discountRates, setDiscountRates] = useState({ ...DEFAULT_DISCOUNTS });
+  const [tvaPercent, setTvaPercent] = useState(0);
+
+  const [selectedEquip, setSelectedEquip] = useState({}); // id -> { price, cautionOn, caution, accordageOn, accordagePrice }
+  const [paymentStatus, setPaymentStatus] = useState('attente');
+  const [notes, setNotes] = useState('');
+  const [justSaved, setJustSaved] = useState(false);
+
+  const occurrences = useMemo(() => {
+    if (scheduleType === 'ponctuel') return ponctuelDates.flatMap(occurrencesFromRange);
+    return generateRecurrentOccurrences({ weekdays, startDate: recStartDate, durationValue, durationUnit, startTime: recStart, endTime: recEnd });
+  }, [scheduleType, ponctuelDates, weekdays, recStartDate, durationValue, durationUnit, recStart, recEnd]);
+
+  const recurrenceInfo = scheduleType === 'recurrent' ? { type: 'recurrent', durationUnit } : null;
+  const autoQty = useMemo(() => suggestedQuantity(tariffType, occurrences, recurrenceInfo), [tariffType, occurrences, recurrenceInfo]);
+  const quantity = quantityOverride !== null ? quantityOverride : autoQty;
+  const totalHours = useMemo(() => Math.round(computeTotalHours(occurrences) * 100) / 100, [occurrences]);
+
+  useEffect(() => { setQuantityOverride(null); }, [tariffType, scheduleType, JSON.stringify(occurrences)]);
+  useEffect(() => { setUnitPrice(String(computeUnitPriceForTariff(tariffType))); }, [tariffType]);
+
+  const scheduleErrors = useMemo(() => validateOccurrences(occurrences, tariffType), [occurrences, tariffType]);
+
+  function toggleEquip(id) {
+    const eqDef = EQUIPEMENT_CATALOG.find((e) => e.id === id);
+    setSelectedEquip((prev) => {
+      const next = { ...prev };
+      if (id in next) { delete next[id]; return next; }
+      next[id] = {
+        price: eqDef.isHourly ? Math.round(eqDef.hourlyRate * totalHours * 100) / 100 : eqDef.defaultPrice,
+        cautionOn: false, caution: eqDef.defaultCaution,
+        accordageOn: false, accordagePrice: ACCORDAGE_PRICE,
+      };
+      return next;
+    });
+  }
+  function updateEquipField(id, field, val) {
+    setSelectedEquip((prev) => ({ ...prev, [id]: { ...prev[id], [field]: val } }));
+  }
+  function toggleEquipBool(id, field) {
+    setSelectedEquip((prev) => ({ ...prev, [id]: { ...prev[id], [field]: !prev[id][field] } }));
+  }
+  function applyTechnicienSuggestion(id) {
+    const eqDef = EQUIPEMENT_CATALOG.find((e) => e.id === id);
+    updateEquipField(id, 'price', Math.round(eqDef.hourlyRate * totalHours * 100) / 100);
+  }
+
+  function addPonctuelRow() {
+    setPonctuelDates((rows) => {
+      const last = rows[rows.length - 1];
+      return [...rows, { dateDebut: '', dateFin: '', start: last?.start || '09:00', end: last?.end || '17:00' }];
+    });
+  }
+  function removePonctuelRow(idx) { setPonctuelDates((rows) => rows.filter((_, i) => i !== idx)); }
+  function updatePonctuelRow(idx, field, val) {
+    setPonctuelDates((rows) => rows.map((r, i) => (i === idx ? { ...r, [field]: val } : r)));
+  }
+  function toggleWeekday(idx) {
+    setWeekdays((w) => (w.includes(idx) ? w.filter((x) => x !== idx) : [...w, idx].sort()));
+  }
+
+  const equipementList = [];
+  Object.entries(selectedEquip).forEach(([id, v]) => {
+    const cat = EQUIPEMENT_CATALOG.find((e) => e.id === id);
+    equipementList.push({
+      id, name: cat.name, type: cat.type,
+      price: Number(v.price) || 0,
+      cautionOn: !!v.cautionOn,
+      caution: v.cautionOn ? (Number(v.caution) || 0) : 0,
+    });
+    if (cat.hasAccordage && v.accordageOn) {
+      equipementList.push({
+        id: id + '_accordage', name: `Accordage — ${cat.name}`, type: 'service',
+        price: Number(v.accordagePrice) || 0, cautionOn: false, caution: 0,
+      });
+    }
+  });
+
+  const discountPercent = Number(discountRates[tariffType]) || 0;
+  const baseTotal = (Number(unitPrice) || 0) * (Number(quantity) || 0);
+  const discountAmount = baseTotal * (discountPercent / 100);
+  const equipTotal = equipementList.reduce((s, e) => s + e.price, 0);
+  const cautionTotal = equipementList.reduce((s, e) => s + e.caution, 0);
+  const subtotalHT = baseTotal - discountAmount + equipTotal + cautionTotal;
+  const tvaAmount = subtotalHT * ((Number(tvaPercent) || 0) / 100);
+  const total = subtotalHT + tvaAmount;
+
+  const draftRes = { clientName, local, equipement: equipementList, occurrences };
+  const conflicts = useMemo(
+    () => (occurrences.length && clientName.trim() ? findScheduleConflicts(draftRes, reservations, null) : []),
+    [local, clientName, JSON.stringify(equipementList), JSON.stringify(occurrences), reservations]
+  );
+
+  const canSubmit = clientName.trim() && occurrences.length > 0 && Number(unitPrice) >= 0 && scheduleErrors.length === 0 && conflicts.length === 0;
+
+  function handleSubmit() {
+    if (!canSubmit) return;
+    const newRes = {
+      id: uid(),
+      clientName: clientName.trim(),
+      local,
+      scheduleType,
+      recurrence: scheduleType === 'recurrent' ? { weekdays, startDate: recStartDate, durationValue, durationUnit, startTime: recStart, endTime: recEnd } : null,
+      ponctuelDates: scheduleType === 'ponctuel' ? ponctuelDates.filter((d) => d.dateDebut) : [],
+      occurrences,
+      tariffType,
+      unitPrice: Number(unitPrice) || 0,
+      quantity: Number(quantity) || 0,
+      discountPercent,
+      tvaPercent: Number(tvaPercent) || 0,
+      equipement: equipementList,
+      paymentStatus,
+      notes,
+      createdAt: Date.now(),
+    };
+    onCreate(newRes);
+    setClientName(''); setLocal('rdc'); setScheduleType('ponctuel');
+    setPonctuelDates([{ dateDebut: '', dateFin: '', start: '14:00', end: '19:00' }]);
+    setWeekdays([0]); setRecStartDate(''); setDurationValue(1); setDurationUnit('mois'); setRecStart('18:00'); setRecEnd('20:00');
+    setTariffType('heure'); setUnitPrice('20'); setQuantityOverride(null);
+    setSelectedEquip({}); setPaymentStatus('attente'); setNotes('');
+    setJustSaved(true);
+    setTimeout(() => setJustSaved(false), 2500);
+  }
+
+  return (
+    <div className="grid grid-cols-1 sm:grid-cols-5 gap-6 items-start">
+      <div className="sm:col-span-3 space-y-5">
+
+        <div className="bg-card rounded-lg border border-paperdark p-5">
+          <div className="text-xs uppercase tracking-widest text-muted font-semibold mb-3">Client & local</div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-sm font-medium text-ink mb-1">Nom du client / de l'activité</label>
+              <input value={clientName} onChange={(e) => setClientName(e.target.value)} placeholder="ex : M. Nsimba — répétitions chorale"
+                className="w-full border border-paperdark rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ink/30" />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-ink mb-1">Local demandé</label>
+              <div className="flex gap-2">
+                {LOCAUX.map((l) => (
+                  <button key={l.id} onClick={() => setLocal(l.id)}
+                    className={`chip flex-1 px-3 py-2 rounded-md text-sm font-medium border ${local === l.id ? 'bg-ink text-white border-ink' : 'bg-white border-paperdark text-inktext hover:border-ink/40'}`}>
+                    {l.name}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div className="bg-card rounded-lg border border-paperdark p-5">
+          <div className="text-xs uppercase tracking-widest text-muted font-semibold mb-1">Créneaux & récurrence</div>
+          <div className="text-[11px] text-muted mb-3">Horaires possibles : {HORAIRE_MIN}–{HORAIRE_MAX} (fermeture à 22h) · {MAX_HEURES_PAR_JOUR}h max par jour · minimum {MIN_HEURES_TARIF_HORAIRE}h pour un tarif à l'heure · {ESPACEMENT_MIN_MINUTES} min d'écart requises entre 2 clients différents.</div>
+          <div className="flex gap-2 mb-4">
+            <button onClick={() => setScheduleType('ponctuel')}
+              className={`chip px-3 py-1.5 rounded-full text-sm font-medium border ${scheduleType === 'ponctuel' ? 'bg-ink text-white border-ink' : 'bg-white border-paperdark hover:border-ink/40'}`}>
+              📅 Dates ponctuelles
+            </button>
+            <button onClick={() => setScheduleType('recurrent')}
+              className={`chip px-3 py-1.5 rounded-full text-sm font-medium border ${scheduleType === 'recurrent' ? 'bg-ink text-white border-ink' : 'bg-white border-paperdark hover:border-ink/40'}`}>
+              🔁 Récurrent (jour fixe)
+            </button>
+          </div>
+
+          {scheduleType === 'ponctuel' ? (
+            <div className="space-y-3">
+              {ponctuelDates.map((row, idx) => (
+                <div key={idx} className="flex flex-wrap items-end gap-2 bg-paper/50 rounded-md p-2">
+                  <div className="flex flex-col">
+                    <label className="text-[10px] text-muted mb-0.5">Date début</label>
+                    <input type="date" value={row.dateDebut} onChange={(e) => updatePonctuelRow(idx, 'dateDebut', e.target.value)}
+                      className="border border-paperdark rounded-md px-2 py-1.5 text-sm" />
+                  </div>
+                  <div className="flex flex-col">
+                    <label className="text-[10px] text-muted mb-0.5">Date fin (optionnel)</label>
+                    <input type="date" value={row.dateFin} onChange={(e) => updatePonctuelRow(idx, 'dateFin', e.target.value)}
+                      className="border border-paperdark rounded-md px-2 py-1.5 text-sm" />
+                  </div>
+                  <span className="text-muted text-sm pb-1.5">de</span>
+                  <select value={row.start} onChange={(e) => updatePonctuelRow(idx, 'start', e.target.value)}
+                    className="border border-paperdark rounded-md px-2 py-1.5 text-sm font-mono">
+                    {TIME_OPTIONS.map((t) => <option key={t} value={t}>{t}</option>)}
+                  </select>
+                  <span className="text-muted text-sm pb-1.5">à</span>
+                  <select value={row.end} onChange={(e) => updatePonctuelRow(idx, 'end', e.target.value)}
+                    className="border border-paperdark rounded-md px-2 py-1.5 text-sm font-mono">
+                    {TIME_OPTIONS.map((t) => <option key={t} value={t}>{t}</option>)}
+                  </select>
+                  {ponctuelDates.length > 1 && (
+                    <button onClick={() => removePonctuelRow(idx)} className="text-brick text-sm hover:underline ml-auto pb-1.5">Retirer</button>
+                  )}
+                </div>
+              ))}
+              <button onClick={addPonctuelRow} className="text-sm font-medium text-ink hover:underline mt-1">+ Ajouter une plage de dates</button>
+            </div>
+          ) : (
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-ink mb-1.5">Jour(s) de la semaine</label>
+                <div className="flex gap-1.5 flex-wrap">
+                  {JOURS.map((j, idx) => (
+                    <button key={j} onClick={() => toggleWeekday(idx)}
+                      className={`chip w-11 h-9 rounded-md text-xs font-semibold border ${weekdays.includes(idx) ? 'bg-ink text-white border-ink' : 'bg-white border-paperdark hover:border-ink/40'}`}>
+                      {j}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                <div>
+                  <label className="block text-sm font-medium text-ink mb-1">De</label>
+                  <select value={recStart} onChange={(e) => setRecStart(e.target.value)} className="w-full border border-paperdark rounded-md px-2 py-1.5 text-sm font-mono">
+                    {TIME_OPTIONS.map((t) => <option key={t} value={t}>{t}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-ink mb-1">À</label>
+                  <select value={recEnd} onChange={(e) => setRecEnd(e.target.value)} className="w-full border border-paperdark rounded-md px-2 py-1.5 text-sm font-mono">
+                    {TIME_OPTIONS.map((t) => <option key={t} value={t}>{t}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-ink mb-1">Début le</label>
+                  <input type="date" value={recStartDate} onChange={(e) => setRecStartDate(e.target.value)} className="w-full border border-paperdark rounded-md px-2 py-1.5 text-sm" />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-ink mb-1">Pendant</label>
+                  <div className="flex gap-1">
+                    <input type="number" min="1" value={durationValue} onChange={(e) => setDurationValue(e.target.value)} className="w-16 border border-paperdark rounded-md px-2 py-1.5 text-sm" />
+                    <select value={durationUnit} onChange={(e) => setDurationUnit(e.target.value)} className="flex-1 border border-paperdark rounded-md px-1 py-1.5 text-sm">
+                      <option value="semaines">semaine(s)</option>
+                      <option value="mois">mois</option>
+                    </select>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {occurrences.length > 0 && (
+            <div className="mt-4 pt-3 border-t border-paperdark">
+              <div className="text-xs text-muted mb-1.5">{occurrences.length} occurrence(s) générée(s) · {totalHours}h au total :</div>
+              <div className="flex flex-wrap gap-1.5 max-h-24 overflow-y-auto">
+                {occurrences.map((o, i) => (
+                  <span key={i} className="font-mono text-xs bg-paper px-2 py-1 rounded border border-paperdark whitespace-nowrap">
+                    {formatDateFR(o.date)} · {o.start}–{o.end}
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+
+        <div className="bg-card rounded-lg border border-paperdark p-5">
+          <div className="text-xs uppercase tracking-widest text-muted font-semibold mb-3">Tarification</div>
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+            <div>
+              <label className="block text-sm font-medium text-ink mb-1">Type de tarif</label>
+              <select value={tariffType} onChange={(e) => setTariffType(e.target.value)} className="w-full border border-paperdark rounded-md px-2 py-2 text-sm">
+                <option value="heure">À l'heure</option>
+                <option value="jour">À la journée</option>
+                <option value="semaine">À la semaine</option>
+                <option value="mois">Au mois</option>
+              </select>
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-ink mb-1">Montant unitaire (€)</label>
+              <input type="number" min="0" step="0.5" value={unitPrice} onChange={(e) => setUnitPrice(e.target.value)}
+                className="w-full border border-paperdark rounded-md px-2 py-2 text-sm font-mono" />
+              <div className="text-[11px] text-muted mt-1">
+                tarif standard : {computeUnitPriceForTariff(tariffType)}€ {TARIFF_LABELS[tariffType]} (modifiable)
+              </div>
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-ink mb-1">Quantité facturée</label>
+              <input type="number" min="0" step="1" value={quantity} onChange={(e) => setQuantityOverride(e.target.value)}
+                className="w-full border border-paperdark rounded-md px-2 py-2 text-sm font-mono" />
+              <div className="text-[11px] text-muted mt-1">suggestion auto : {autoQty}</div>
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-ink mb-1">Sous-total</label>
+              <div className="w-full border border-paperdark bg-paper rounded-md px-2 py-2 text-sm font-mono font-semibold">{euro(baseTotal)} €</div>
+            </div>
+          </div>
+
+          <div className="mt-4 pt-4 border-t border-paperdark">
+            <div className="text-xs font-semibold text-ink mb-2">Remises automatiques (appliquées selon le type de tarif)</div>
+            <div className="grid grid-cols-3 gap-3">
+              {['jour', 'semaine', 'mois'].map((t) => (
+                <div key={t}>
+                  <label className="block text-xs text-muted mb-1">{t === 'jour' ? 'À la journée' : t === 'semaine' ? 'À la semaine' : 'Au mois'} (%)</label>
+                  <div className="flex items-center gap-1">
+                    <input type="number" min="0" max="100" step="1" value={discountRates[t]}
+                      onChange={(e) => setDiscountRates((prev) => ({ ...prev, [t]: e.target.value }))}
+                      className={`w-full border rounded-md px-2 py-1.5 text-sm font-mono ${tariffType === t ? 'border-ink bg-ink/5' : 'border-paperdark'}`} />
+                    <span className="text-xs text-muted">%</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+            {discountPercent > 0 && <div className="mt-2 text-sm text-forestdark font-medium">Remise appliquée : -{discountPercent}% soit -{euro(discountAmount)} €</div>}
+          </div>
+
+          <div className="mt-4 pt-4 border-t border-paperdark">
+            <div className="text-xs font-semibold text-ink mb-2">TVA</div>
+            <div className="flex items-center gap-2 max-w-[160px]">
+              <input type="number" min="0" max="100" step="0.5" value={tvaPercent} onChange={(e) => setTvaPercent(e.target.value)}
+                className="w-full border border-paperdark rounded-md px-2 py-1.5 text-sm font-mono" />
+              <span className="text-xs text-muted">%</span>
+            </div>
+            <div className="text-[11px] text-muted mt-1">Pourcentage libre — laissez 0 si non applicable. S'ajoute au total facturé.</div>
+          </div>
+        </div>
+
+        <div className="bg-card rounded-lg border border-paperdark p-5">
+          <div className="text-xs uppercase tracking-widest text-muted font-semibold mb-3">Matériel en option</div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            {EQUIPEMENT_CATALOG.map((eq) => {
+              const checked = eq.id in selectedEquip;
+              const v = selectedEquip[eq.id];
+              return (
+                <div key={eq.id} className={`rounded-md border p-3 ${checked ? 'border-ink bg-ink/5' : 'border-paperdark'}`}>
+                  <div className="flex items-center gap-3">
+                    <input type="checkbox" className="sq w-4 h-4" checked={checked} onChange={() => toggleEquip(eq.id)} />
+                    <div className="flex-1 text-sm font-medium text-inktext">{eq.icon} {eq.name}</div>
+                    {checked && (
+                      <div className="flex items-center gap-1">
+                        <input type="number" min="0" step="0.5" value={v.price} onChange={(e) => updateEquipField(eq.id, 'price', e.target.value)}
+                          className="w-16 border border-paperdark rounded px-1.5 py-1 text-xs font-mono" />
+                        <span className="text-xs text-muted">€</span>
+                      </div>
+                    )}
+                  </div>
+
+                  {checked && eq.isHourly && (
+                    <div className="mt-1.5 text-[11px] text-muted flex items-center gap-1.5">
+                      <span>{eq.hourlyRate}€/h × {totalHours}h = {euro(eq.hourlyRate * totalHours)}€</span>
+                      <button onClick={() => applyTechnicienSuggestion(eq.id)} className="text-ink underline">appliquer</button>
+                    </div>
+                  )}
+
+                  {checked && eq.hasAccordage && (
+                    <div className="mt-2 pt-2 border-t border-paperdark/70 flex items-center gap-2">
+                      <input type="checkbox" className="sq w-3.5 h-3.5" checked={v.accordageOn} onChange={() => toggleEquipBool(eq.id, 'accordageOn')} />
+                      <span className="text-xs text-muted flex-1">🎼 Ajouter un accordage</span>
+                      {v.accordageOn && (
+                        <div className="flex items-center gap-1">
+                          <input type="number" min="0" step="1" value={v.accordagePrice} onChange={(e) => updateEquipField(eq.id, 'accordagePrice', e.target.value)}
+                            className="w-16 border border-ink/30 bg-ink/5 rounded px-1.5 py-1 text-xs font-mono" />
+                          <span className="text-xs text-muted">€</span>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {checked && !eq.noCaution && (
+                    <div className="mt-2 pt-2 border-t border-paperdark/70 flex items-center gap-2">
+                      <input type="checkbox" className="sq w-3.5 h-3.5" checked={v.cautionOn} onChange={() => toggleEquipBool(eq.id, 'cautionOn')} />
+                      <span className="text-xs text-muted flex-1">Ajouter une caution</span>
+                      {v.cautionOn && (
+                        <div className="flex items-center gap-1">
+                          <input type="number" min="0" step="1" value={v.caution} onChange={(e) => updateEquipField(eq.id, 'caution', e.target.value)}
+                            className="w-16 border border-amber/50 bg-amber/5 rounded px-1.5 py-1 text-xs font-mono" />
+                          <span className="text-xs text-muted">€</span>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
+        <div className="bg-card rounded-lg border border-paperdark p-5">
+          <div className="text-xs uppercase tracking-widest text-muted font-semibold mb-3">Statut du paiement & notes</div>
+          <div className="flex gap-2 mb-3">
+            <button onClick={() => setPaymentStatus('attente')}
+              className={`chip px-3 py-1.5 rounded-md text-sm font-medium border ${paymentStatus === 'attente' ? 'bg-amber text-white border-amber' : 'bg-white border-paperdark'}`}>
+              En attente de paiement
+            </button>
+            <button onClick={() => setPaymentStatus('paye')}
+              className={`chip px-3 py-1.5 rounded-md text-sm font-medium border ${paymentStatus === 'paye' ? 'bg-forest text-white border-forest' : 'bg-white border-paperdark'}`}>
+              Payé — période bloquée
+            </button>
+          </div>
+          <textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows="2" placeholder="Notes libres (contexte, demande par e-mail, particularités...)"
+            className="w-full border border-paperdark rounded-md px-3 py-2 text-sm" />
+        </div>
+
+        {scheduleErrors.length > 0 && (
+          <div className="rounded-lg border border-brick/40 bg-brick/5 p-4">
+            <div className="text-sm font-semibold text-brick mb-2">⛔ Créneau non valide</div>
+            <ul className="text-sm text-inktext space-y-1">{scheduleErrors.map((msg, i) => <li key={i}>• {msg}</li>)}</ul>
+          </div>
+        )}
+
+        {conflicts.length > 0 && (
+          <div className="rounded-lg border border-brick/40 bg-brick/5 p-4">
+            <div className="text-sm font-semibold text-brick mb-2">⛔ Réservation bloquée — {conflicts.length} conflit(s)</div>
+            <ul className="text-sm text-inktext space-y-1">
+              {conflicts.slice(0, 8).map((c, i) => (
+                <li key={i}>• {formatDateFR(c.date)} — <strong>{c.what}</strong> déjà réservé pour <strong>{c.with}</strong> ({c.reason})</li>
+              ))}
+            </ul>
+            <div className="text-xs text-muted mt-2">Aucune exception possible sauf s'il s'agit du même client (nom identique).</div>
+          </div>
+        )}
+
+        <button onClick={handleSubmit} disabled={!canSubmit}
+          className={`w-full py-3 rounded-md font-semibold text-sm transition ${canSubmit ? 'bg-ink text-white hover:bg-inkdark' : 'bg-paperdark text-muted cursor-not-allowed'}`}>
+          Enregistrer la réservation
+        </button>
+        {justSaved && <div className="text-center text-sm text-forestdark font-medium">✓ Réservation enregistrée</div>}
+      </div>
+
+      {/* ---- Colonne reçu ---- */}
+      <div className="sm:col-span-2 sm:sticky sm:top-6 mt-2 sm:mt-0">
+        <div className="receipt rounded-t-md rounded-b-none px-5 pt-5 pb-8 font-mono">
+          <div className="text-center mb-3">
+            <div className="font-display text-lg font-semibold text-ink tracking-wide">REÇU — ESTIMATION</div>
+            <div className="text-[11px] text-muted">Association locale — usage interne</div>
+          </div>
+          <div className="receipt-dashed pt-3 text-xs space-y-1 text-inktext">
+            <div className="flex justify-between"><span>Client</span><span className="font-semibold text-right">{clientName || '—'}</span></div>
+            <div className="flex justify-between"><span>Local</span><span>{LOCAUX.find((l) => l.id === local)?.name}</span></div>
+            <div className="flex justify-between"><span>Créneaux</span><span>{occurrences.length} occ.</span></div>
+          </div>
+          <div className="receipt-dashed pt-3 mt-3 text-xs space-y-1">
+            <div className="flex justify-between text-inktext">
+              <span>{quantity} × {euro(Number(unitPrice) || 0)} € {TARIFF_LABELS[tariffType]}</span>
+              <span>{euro(baseTotal)} €</span>
+            </div>
+            {discountPercent > 0 && (
+              <div className="flex justify-between text-forestdark"><span>Remise ({discountPercent}%)</span><span>-{euro(discountAmount)} €</span></div>
+            )}
+            {equipementList.map((e) => (
+              <div key={e.id} className="flex justify-between text-muted"><span>+ {e.name}</span><span>{euro(e.price)} €</span></div>
+            ))}
+            {cautionTotal > 0 && (
+              <div className="flex justify-between text-amberdark"><span>Caution (incluse au total)</span><span>{euro(cautionTotal)} €</span></div>
+            )}
+          </div>
+          <div className="receipt-dashed pt-3 mt-3 text-xs space-y-1">
+            <div className="flex justify-between text-inktext"><span>Sous-total</span><span>{euro(subtotalHT)} €</span></div>
+            {Number(tvaPercent) > 0 && (
+              <div className="flex justify-between text-inktext"><span>TVA ({tvaPercent}%)</span><span>{euro(tvaAmount)} €</span></div>
+            )}
+          </div>
+          <div className="receipt-dashed pt-3 mt-3 flex justify-between items-baseline">
+            <span className="text-sm font-semibold text-ink">TOTAL</span>
+            <span className="text-2xl font-bold text-ink">{euro(total)} €</span>
+          </div>
+          <div className="mt-3 flex justify-center"><PaymentBadge status={paymentStatus} /></div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ============================= PLANNING : GRILLE ============================= */
+
+function CalendarGrid({ reservations, filterLocal, onSelectOccurrence }) {
+  const [cursor, setCursor] = useState(() => { const d = new Date(); d.setDate(1); return d; });
+  const byLocal = filterLocal === 'tous' ? LOCAUX : LOCAUX.filter((l) => l.id === filterLocal);
+  const monthLabel = `${MOIS_LONG[cursor.getMonth()]} ${cursor.getFullYear()}`;
+  const firstOfMonth = new Date(cursor.getFullYear(), cursor.getMonth(), 1);
+  const startOffset = jsDayToOurIndex(firstOfMonth.getDay());
+  const daysInMonth = new Date(cursor.getFullYear(), cursor.getMonth() + 1, 0).getDate();
+  const cells = [];
+  for (let i = 0; i < startOffset; i++) cells.push(null);
+  for (let d = 1; d <= daysInMonth; d++) cells.push(d);
+  while (cells.length % 7 !== 0) cells.push(null);
+
+  function occurrencesForDay(day, localId) {
+    if (!day) return [];
+    const iso = toISO(new Date(cursor.getFullYear(), cursor.getMonth(), day));
+    const list = [];
+    reservations.forEach((res) => {
+      if (res.local !== localId) return;
+      res.occurrences.forEach((occ) => { if (occ.date === iso) list.push({ res, occ }); });
+    });
+    return list;
+  }
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-4">
+        <button onClick={() => setCursor(addMonths(cursor, -1))} className="px-3 py-1.5 rounded-md border border-paperdark hover:border-ink/40 text-sm">‹ Précédent</button>
+        <div className="font-display text-lg font-semibold text-ink">{monthLabel}</div>
+        <button onClick={() => setCursor(addMonths(cursor, 1))} className="px-3 py-1.5 rounded-md border border-paperdark hover:border-ink/40 text-sm">Suivant ›</button>
+      </div>
+      <div className={`grid gap-4 ${byLocal.length === 2 ? 'lg:grid-cols-2' : 'grid-cols-1'}`}>
+        {byLocal.map((loc) => (
+          <div key={loc.id} className="bg-card rounded-lg border border-paperdark p-4">
+            <div className="text-sm font-semibold text-ink mb-3">{loc.name}</div>
+            <div className="grid grid-cols-7 gap-1 mb-1">
+              {JOURS.map((j) => <div key={j} className="text-[10px] font-semibold text-muted text-center py-1">{j}</div>)}
+            </div>
+            <div className="grid grid-cols-7 gap-1">
+              {cells.map((day, idx) => {
+                const occs = occurrencesForDay(day, loc.id);
+                const isToday = day && toISO(new Date(cursor.getFullYear(), cursor.getMonth(), day)) === toISO(new Date());
+                return (
+                  <div key={idx} className={`min-h-[64px] rounded border text-left p-1 ${day ? 'border-paperdark bg-white' : 'border-transparent'} ${isToday ? 'ring-2 ring-ink/30' : ''}`}>
+                    {day && <div className="text-[10px] text-muted mb-0.5">{day}</div>}
+                    <div className="space-y-0.5">
+                      {occs.slice(0, 2).map((o, i) => (
+                        <button key={i} onClick={() => onSelectOccurrence(o.res)}
+                          className={`w-full text-left text-[9.5px] leading-tight rounded px-1 py-0.5 truncate ${o.res.paymentStatus === 'paye' ? 'bg-forest/15 text-forestdark' : 'bg-amber/20 text-amberdark'}`}>
+                          {o.occ.start} {o.res.clientName}
+                        </button>
+                      ))}
+                      {occs.length > 2 && <div className="text-[9px] text-muted px-1">+{occs.length - 2} autre(s)</div>}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        ))}
+      </div>
+      <div className="flex gap-4 mt-3 text-xs text-muted">
+        <span className="inline-flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-sm bg-amber/40 inline-block"></span> En attente</span>
+        <span className="inline-flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-sm bg-forest/40 inline-block"></span> Payé / bloqué</span>
+      </div>
+    </div>
+  );
+}
+
+/* ============================= PLANNING : LISTE ============================= */
+
+function PlanningList({ reservations, filterLocal, onSelectOccurrence }) {
+  const rows = [];
+  reservations.forEach((res) => {
+    if (filterLocal !== 'tous' && res.local !== filterLocal) return;
+    res.occurrences.forEach((occ) => rows.push({ res, occ }));
+  });
+  rows.sort((a, b) => (a.occ.date + a.occ.start).localeCompare(b.occ.date + b.occ.start));
+  const grouped = {};
+  rows.forEach((r) => { const key = r.occ.date.slice(0, 7); grouped[key] = grouped[key] || []; grouped[key].push(r); });
+
+  if (!rows.length) return <div className="text-sm text-muted py-8 text-center">Aucun créneau à afficher pour ce filtre.</div>;
+
+  return (
+    <div className="space-y-6">
+      {Object.entries(grouped).map(([key, items]) => {
+        const [y, m] = key.split('-');
+        return (
+          <div key={key}>
+            <div className="text-xs uppercase tracking-widest text-muted font-semibold mb-2">{MOIS_LONG[Number(m) - 1]} {y}</div>
+            <div className="bg-card rounded-lg border border-paperdark divide-y divide-paperdark overflow-hidden">
+              {items.map((r, i) => (
+                <button key={i} onClick={() => onSelectOccurrence(r.res)} className="w-full flex flex-wrap items-center gap-3 px-4 py-2.5 text-left hover:bg-paper/60 transition">
+                  <div className="font-mono text-xs w-28 shrink-0 text-inktext">{formatDateFR(r.occ.date)}</div>
+                  <div className="font-mono text-xs w-20 shrink-0 text-muted">{r.occ.start}–{r.occ.end}</div>
+                  <LocalBadge localId={r.res.local} />
+                  <div className="text-sm font-medium flex-1 min-w-[120px] truncate">{r.res.clientName}</div>
+                  <div className="flex gap-1 flex-wrap">{r.res.equipement.map((e) => <Badge key={e.id} tone="muted">{e.name}</Badge>)}</div>
+                  <PaymentBadge status={r.res.paymentStatus} />
+                  <div className="font-mono text-sm font-semibold w-20 text-right">{euro(resTotal(r.res))} €</div>
+                </button>
+              ))}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function PlanningView({ reservations }) {
+  const [filterLocal, setFilterLocal] = useState('tous');
+  const [view, setView] = useState('grille');
+  const [selected, setSelected] = useState(null);
+
+  return (
+    <div>
+      <SectionTitle eyebrow="Vue d'ensemble" title="Planning des locaux" />
+      <div className="flex flex-wrap items-center justify-between gap-3 mb-5">
+        <div className="flex gap-1.5">
+          {[{ id: 'tous', name: 'Les deux locaux' }, ...LOCAUX].map((l) => (
+            <button key={l.id} onClick={() => setFilterLocal(l.id)}
+              className={`chip px-3 py-1.5 rounded-full text-sm font-medium border ${filterLocal === l.id ? 'bg-ink text-white border-ink' : 'bg-white border-paperdark hover:border-ink/40'}`}>
+              {l.name}
+            </button>
+          ))}
+        </div>
+        <div className="flex rounded-md border border-paperdark overflow-hidden">
+          <button onClick={() => setView('grille')} className={`px-4 py-1.5 text-sm font-medium ${view === 'grille' ? 'bg-ink text-white' : 'bg-white text-inktext'}`}>▦ Grille</button>
+          <button onClick={() => setView('liste')} className={`px-4 py-1.5 text-sm font-medium ${view === 'liste' ? 'bg-ink text-white' : 'bg-white text-inktext'}`}>☰ Liste</button>
+        </div>
+      </div>
+
+      {view === 'grille'
+        ? <CalendarGrid reservations={reservations} filterLocal={filterLocal} onSelectOccurrence={(res) => setSelected(res)} />
+        : <PlanningList reservations={reservations} filterLocal={filterLocal} onSelectOccurrence={(res) => setSelected(res)} />}
+
+      {selected && (
+        <Modal title={selected.clientName} onClose={() => setSelected(null)}>
+          <ReservationDetail res={selected} />
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+function ReservationDetail({ res }) {
+  const base = resBase(res), discount = resDiscountAmount(res), equip = resEquip(res), caution = resCaution(res);
+  const subtotal = resSubtotalHT(res), tva = resTvaAmount(res), total = resTotal(res);
+  return (
+    <div className="space-y-3 text-sm">
+      <div className="flex flex-wrap gap-2"><LocalBadge localId={res.local} /><PaymentBadge status={res.paymentStatus} /></div>
+      <div><span className="text-muted">Tarif : </span>{res.quantity} × {euro(res.unitPrice)} € {TARIFF_LABELS[res.tariffType]} = {euro(base)} €</div>
+      {discount > 0 && <div className="text-forestdark">Remise appliquée : -{res.discountPercent}% (-{euro(discount)} €)</div>}
+      <div><span className="text-muted">Matériel : </span>{res.equipement.length ? res.equipement.map((e) => `${e.name} (${euro(e.price)}€)`).join(', ') : 'aucun'}</div>
+      {caution > 0 && <div className="text-amberdark">Caution incluse : {euro(caution)} €</div>}
+      <div className="pt-2 border-t border-paperdark">Sous-total : <span className="font-mono">{euro(subtotal)} €</span></div>
+      {res.tvaPercent > 0 && <div>TVA ({res.tvaPercent}%) : <span className="font-mono">{euro(tva)} €</span></div>}
+      <div className="font-mono font-semibold text-ink text-base">Total à payer : {euro(total)} €</div>
+      <div>
+        <div className="text-muted mb-1">Occurrences ({res.occurrences.length}) :</div>
+        <div className="flex flex-wrap gap-1.5 max-h-32 overflow-y-auto">
+          {res.occurrences.map((o, i) => <span key={i} className="font-mono text-xs bg-paper px-2 py-1 rounded border border-paperdark">{formatDateFR(o.date)} · {o.start}–{o.end}</span>)}
+        </div>
+      </div>
+      {res.notes && <div><span className="text-muted">Notes : </span>{res.notes}</div>}
+    </div>
+  );
+}
+
+/* ============================= MATÉRIEL ============================= */
+
+function MaterielView({ reservations }) {
+  const now = new Date();
+  const nowISO = toISO(now);
+  const nowTime = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+
+  return (
+    <div>
+      <SectionTitle eyebrow="Inventaire" title="Statut du matériel" />
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        {EQUIPEMENT_CATALOG.map((eq) => {
+          const bookings = [];
+          reservations.forEach((res) => {
+            const used = res.equipement.find((e) => e.id === eq.id);
+            if (!used) return;
+            res.occurrences.forEach((occ) => bookings.push({ res, occ }));
+          });
+          bookings.sort((a, b) => (a.occ.date + a.occ.start).localeCompare(b.occ.date + b.occ.start));
+          const busyNow = bookings.some((b) => b.occ.date === nowISO && b.occ.start <= nowTime && nowTime < b.occ.end);
+          const upcoming = bookings.filter((b) => b.occ.date >= nowISO);
+
+          return (
+            <div key={eq.id} className="bg-card rounded-lg border border-paperdark p-5">
+              <div className="flex items-center justify-between mb-3">
+                <div className="text-base font-semibold text-ink">{eq.icon} {eq.name}</div>
+                {busyNow ? <Badge tone="brick">Réservé actuellement</Badge> : <Badge tone="forest">Disponible maintenant</Badge>}
+              </div>
+              <div className="text-xs uppercase tracking-widest text-muted font-semibold mb-2">Prochaines réservations</div>
+              {upcoming.length === 0 ? <div className="text-sm text-muted">Aucune réservation à venir.</div> : (
+                <div className="space-y-1.5 max-h-52 overflow-y-auto">
+                  {upcoming.slice(0, 10).map((b, i) => (
+                    <div key={i} className="flex items-center gap-2 text-sm">
+                      <span className="font-mono text-xs text-muted w-24 shrink-0">{formatDateFR(b.occ.date)}</span>
+                      <span className="font-mono text-xs w-20 shrink-0">{b.occ.start}–{b.occ.end}</span>
+                      <span className="truncate">{b.res.clientName}</span>
+                      <LocalBadge localId={b.res.local} />
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+/* ============================= TOUTES LES RÉSERVATIONS ============================= */
+
+function ReservationsListView({ reservations, onTogglePaiement, onDelete }) {
+  const [search, setSearch] = useState('');
+  const [filterLocal, setFilterLocal] = useState('tous');
+  const [filterStatut, setFilterStatut] = useState('tous');
+  const [expanded, setExpanded] = useState(null);
+  const [toDelete, setToDelete] = useState(null);
+
+  const filtered = reservations.filter((r) => {
+    if (search && !r.clientName.toLowerCase().includes(search.toLowerCase())) return false;
+    if (filterLocal !== 'tous' && r.local !== filterLocal) return false;
+    if (filterStatut !== 'tous' && r.paymentStatus !== filterStatut) return false;
+    return true;
+  }).sort((a, b) => b.createdAt - a.createdAt);
+
+  return (
+    <div>
+      <SectionTitle eyebrow="Registre complet" title="Toutes les réservations" />
+      <div className="flex flex-wrap gap-2 mb-5">
+        <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Rechercher un client..."
+          className="border border-paperdark rounded-md px-3 py-2 text-sm flex-1 min-w-[180px]" />
+        <select value={filterLocal} onChange={(e) => setFilterLocal(e.target.value)} className="border border-paperdark rounded-md px-2 py-2 text-sm">
+          <option value="tous">Tous les locaux</option>
+          {LOCAUX.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
+        </select>
+        <select value={filterStatut} onChange={(e) => setFilterStatut(e.target.value)} className="border border-paperdark rounded-md px-2 py-2 text-sm">
+          <option value="tous">Tous les statuts</option>
+          <option value="attente">En attente</option>
+          <option value="paye">Payé</option>
+        </select>
+      </div>
+
+      {filtered.length === 0 && <div className="text-sm text-muted py-10 text-center">Aucune réservation ne correspond à ces critères.</div>}
+
+      <div className="space-y-3">
+        {filtered.map((res) => {
+          const total = resTotal(res);
+          const isOpen = expanded === res.id;
+          const summary = res.scheduleType === 'recurrent'
+            ? `Récurrent — ${res.recurrence.weekdays.map((w) => JOURS_LONG[w]).join('/')} ${res.recurrence.startTime}-${res.recurrence.endTime} (${res.occurrences.length} occ.)`
+            : `Ponctuel — ${res.occurrences.length} date(s)`;
+          return (
+            <div key={res.id} className="bg-card rounded-lg border border-paperdark overflow-hidden">
+              <div className="flex flex-wrap items-center gap-3 px-4 py-3">
+                <div className="min-w-[160px] flex-1">
+                  <div className="text-sm font-semibold text-ink">{res.clientName}</div>
+                  <div className="text-xs text-muted">{summary}</div>
+                </div>
+                <LocalBadge localId={res.local} />
+                <div className="flex gap-1 flex-wrap">{res.equipement.map((e) => <Badge key={e.id} tone="muted">{e.name}</Badge>)}</div>
+                <div className="font-mono text-sm font-semibold">{euro(total)} €</div>
+                <button onClick={() => onTogglePaiement(res.id)} title="Basculer le statut de paiement"><PaymentBadge status={res.paymentStatus} /></button>
+                <button onClick={() => setExpanded(isOpen ? null : res.id)} className="text-xs font-medium text-ink hover:underline">{isOpen ? 'Réduire' : 'Détails'}</button>
+                <button onClick={() => setToDelete(res)} className="text-xs font-medium text-brick hover:underline">Supprimer</button>
+              </div>
+              {isOpen && <div className="px-4 pb-4 border-t border-paperdark pt-3"><ReservationDetail res={res} /></div>}
+            </div>
+          );
+        })}
+      </div>
+
+      {toDelete && (
+        <Modal title="Confirmer la suppression" onClose={() => setToDelete(null)}>
+          <p className="text-sm mb-4">Supprimer définitivement la réservation de <strong>{toDelete.clientName}</strong> ? Cette action est irréversible.</p>
+          <div className="flex gap-2 justify-end">
+            <button onClick={() => setToDelete(null)} className="px-4 py-2 rounded-md text-sm border border-paperdark">Annuler</button>
+            <button onClick={() => { onDelete(toDelete.id); setToDelete(null); }} className="px-4 py-2 rounded-md text-sm bg-brick text-white">Supprimer</button>
+          </div>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+/* ============================= EXPORTS ============================= */
+
+function buildHumanRows(reservations) {
+  return reservations.map((res) => ({
+    Client: res.clientName,
+    Local: LOCAUX.find((l) => l.id === res.local)?.name || res.local,
+    Type: res.scheduleType === 'recurrent' ? 'Récurrent' : 'Ponctuel',
+    Occurrences: res.occurrences.length,
+    'Première date': res.occurrences[0] ? formatDateFR(res.occurrences[0].date) : '',
+    'Dernière date': res.occurrences.length ? formatDateFR(res.occurrences[res.occurrences.length - 1].date) : '',
+    Tarif: TARIFF_LABELS[res.tariffType],
+    'Prix unitaire €': res.unitPrice,
+    Quantité: res.quantity,
+    'Remise %': res.discountPercent || 0,
+    Matériel: res.equipement.map((e) => e.name).join(', '),
+    'Caution €': resCaution(res),
+    'TVA %': res.tvaPercent || 0,
+    'Total TTC €': Math.round(resTotal(res) * 100) / 100,
+    Statut: res.paymentStatus === 'paye' ? 'Payé' : 'En attente',
+    Notes: res.notes || '',
+  }));
+}
+
+function exportExcel(reservations) {
+  const wb = XLSX.utils.book_new();
+  const wsHuman = XLSX.utils.json_to_sheet(buildHumanRows(reservations));
+  XLSX.utils.book_append_sheet(wb, wsHuman, 'Réservations');
+  const dataRows = reservations.map((r) => ({ id: r.id, json: JSON.stringify(r) }));
+  const wsData = XLSX.utils.json_to_sheet(dataRows);
+  XLSX.utils.book_append_sheet(wb, wsData, '_data');
+  XLSX.writeFile(wb, `reservations-asbl-${toISO(new Date())}.xlsx`);
+}
+
+function exportPDF(reservations) {
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF();
+  doc.setFontSize(16);
+  doc.text('Registre des réservations — ASBL', 14, 16);
+  doc.setFontSize(10);
+  doc.text(`Généré le ${new Date().toLocaleDateString('fr-BE')}`, 14, 22);
+  const rows = reservations.map((r) => [
+    r.clientName, LOCAUX.find((l) => l.id === r.local)?.name || r.local,
+    r.occurrences.length + ' occ.', TARIFF_LABELS[r.tariffType],
+    euro(resTotal(r)) + ' €', r.paymentStatus === 'paye' ? 'Payé' : 'En attente',
+  ]);
+  doc.autoTable({
+    startY: 28,
+    head: [['Client', 'Local', 'Créneaux', 'Tarif', 'Total', 'Statut']],
+    body: rows,
+    styles: { fontSize: 9 },
+    headStyles: { fillColor: [27, 58, 75] },
+  });
+  doc.save(`reservations-asbl-${toISO(new Date())}.pdf`);
+}
+
+function exportWord(reservations) {
+  const rowsHtml = reservations.map((r) => `
+    <tr>
+      <td>${escapeHtml(r.clientName)}</td>
+      <td>${escapeHtml(LOCAUX.find((l) => l.id === r.local)?.name || r.local)}</td>
+      <td>${r.occurrences.length}</td>
+      <td>${TARIFF_LABELS[r.tariffType]}</td>
+      <td>${euro(resTotal(r))} €</td>
+      <td>${r.paymentStatus === 'paye' ? 'Payé' : 'En attente'}</td>
+    </tr>`).join('');
+  const html = `<html xmlns:o='urn:schemas-microsoft-com:office:office' xmlns:w='urn:schemas-microsoft-com:office:word' xmlns='http://www.w3.org/TR/REC-html40'>
+    <head><meta charset="utf-8"><title>Réservations ASBL</title></head>
+    <body>
+      <h2>Registre des réservations — ASBL</h2>
+      <p>Généré le ${new Date().toLocaleDateString('fr-BE')}</p>
+      <table border="1" cellspacing="0" cellpadding="4" style="border-collapse:collapse;font-family:Arial;font-size:11px;">
+        <thead><tr><th>Client</th><th>Local</th><th>Occurrences</th><th>Tarif</th><th>Total</th><th>Statut</th></tr></thead>
+        <tbody>${rowsHtml}</tbody>
+      </table>
+    </body></html>`;
+  const blob = new Blob(['\ufeff', html], { type: 'application/msword' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = `reservations-asbl-${toISO(new Date())}.doc`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+function exportJSON(reservations) {
+  const blob = new Blob([JSON.stringify(reservations, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = `reservations-asbl-${toISO(new Date())}.json`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+/* ============================= SYNCHRONISATION — VUE ============================= */
+
+function SyncView({ teamSession, onTeamJoined, onLeaveTeam, activityLog, syncing, syncError }) {
+  const [mode, setMode] = useState(null); // null | 'create' | 'join'
+  const [teamName, setTeamName] = useState('');
+  const [adminPassword, setAdminPassword] = useState('');
+  const [prenom, setPrenom] = useState('');
+  const [joinCode, setJoinCode] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(null);
+  const [copiedCode, setCopiedCode] = useState(null);
+
+  if (!supabaseClient) {
+    return (
+      <div className="max-w-2xl mx-auto bg-card border border-paperdark rounded-md p-6 text-sm">
+        <p className="text-brick font-medium mb-2">⚠ Synchronisation non configurée</p>
+        <p className="text-muted">
+          Les identifiants Supabase (SUPABASE_URL / SUPABASE_ANON_KEY) ne sont pas renseignés en haut
+          du fichier index.html. Sans cette configuration, l'application fonctionne uniquement en local
+          sur cet appareil.
+        </p>
+      </div>
+    );
+  }
+
+  async function handleCreateTeam(e) {
+    e.preventDefault();
+    setError(null);
+    if (adminPassword !== window.ADMIN_PASSWORD) {
+      setError('Mot de passe administrateur incorrect.');
+      return;
+    }
+    if (!prenom.trim()) {
+      setError('Merci d\'indiquer votre prénom.');
+      return;
+    }
+    setBusy(true);
+    try {
+      const team = await createTeamOnServer(teamName.trim(), prenom.trim());
+      await pushTeamData(team.id, [], prenom.trim());
+      const session = { teamId: team.id, role: 'edit', prenom: prenom.trim(), teamName: team.name, editCode: team.edit_code, viewCode: team.view_code };
+      onTeamJoined(session);
+    } catch (err) {
+      setError('Erreur lors de la création : ' + (err.message || 'inconnue'));
+    }
+    setBusy(false);
+  }
+
+  async function handleJoinTeam(e) {
+    e.preventDefault();
+    setError(null);
+    if (!prenom.trim()) {
+      setError('Merci d\'indiquer votre prénom.');
+      return;
+    }
+    if (!joinCode.trim()) {
+      setError('Merci de coller le code reçu.');
+      return;
+    }
+    setBusy(true);
+    try {
+      const found = await findTeamByCode(joinCode.trim());
+      if (!found) {
+        setError('Code introuvable. Vérifiez qu\'il est correctement copié.');
+        setBusy(false);
+        return;
+      }
+      const session = {
+        teamId: found.team.id,
+        role: found.role,
+        prenom: prenom.trim(),
+        teamName: found.team.name,
+        editCode: found.team.edit_code,
+        viewCode: found.team.view_code,
+      };
+      onTeamJoined(session);
+    } catch (err) {
+      setError('Erreur lors de la connexion : ' + (err.message || 'inconnue'));
+    }
+    setBusy(false);
+  }
+
+  function copyCode(code, label) {
+    navigator.clipboard.writeText(code).then(() => {
+      setCopiedCode(label);
+      setTimeout(() => setCopiedCode(null), 2000);
+    });
+  }
+
+  if (teamSession) {
+    return (
+      <div className="max-w-2xl mx-auto space-y-4">
+        <div className="bg-card border border-paperdark rounded-md p-5">
+          <div className="flex items-center justify-between mb-3">
+            <div>
+              <p className="font-display text-lg font-semibold text-ink">{teamSession.teamName}</p>
+              <p className="text-xs text-muted">
+                Connecté en tant que <strong>{teamSession.prenom}</strong> ·{' '}
+                {teamSession.role === 'edit' ? (
+                  <span className="text-forestdark font-medium">accès modification</span>
+                ) : (
+                  <span className="text-amberdark font-medium">accès consultation seule</span>
+                )}
+              </p>
+            </div>
+            {syncing && <span className="text-[11px] text-muted">Synchronisation…</span>}
+          </div>
+          {syncError && <p className="text-xs text-brick mb-3">{syncError}</p>}
+
+          {teamSession.role === 'edit' && (
+            <div className="border-t border-paperdark pt-3 mt-3 space-y-2">
+              <p className="text-xs font-semibold text-muted uppercase">Codes à partager</p>
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-muted w-40">Code de modification :</span>
+                <code className="font-mono text-sm bg-paperdark px-2 py-1 rounded">{teamSession.editCode}</code>
+                <button onClick={() => copyCode(teamSession.editCode, 'edit')} className="toolbtn px-2 py-1 rounded border border-paperdark text-xs">
+                  {copiedCode === 'edit' ? 'Copié ✓' : 'Copier'}
+                </button>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-muted w-40">Code de consultation :</span>
+                <code className="font-mono text-sm bg-paperdark px-2 py-1 rounded">{teamSession.viewCode}</code>
+                <button onClick={() => copyCode(teamSession.viewCode, 'view')} className="toolbtn px-2 py-1 rounded border border-paperdark text-xs">
+                  {copiedCode === 'view' ? 'Copié ✓' : 'Copier'}
+                </button>
+              </div>
+            </div>
+          )}
+
+          <div className="border-t border-paperdark pt-3 mt-3">
+            <button
+              onClick={() => { if (confirm('Quitter cette équipe ? Vos données locales resteront intactes sur cet appareil.')) onLeaveTeam(); }}
+              className="toolbtn px-3 py-1.5 rounded border border-paperdark text-xs font-medium text-brick"
+            >
+              Quitter l'équipe
+            </button>
+          </div>
+        </div>
+
+        <div className="bg-card border border-paperdark rounded-md p-5">
+          <p className="text-xs font-semibold text-muted uppercase mb-3">Journal d'activité (15 dernières actions)</p>
+          {activityLog.length === 0 && <p className="text-sm text-muted">Aucune activité pour l'instant.</p>}
+          <ul className="space-y-2">
+            {activityLog.map((entry) => (
+              <li key={entry.id} className="text-sm border-b border-paperdark/60 pb-2 last:border-0">
+                <span className="font-medium text-ink">{entry.author_name}</span>{' '}
+                <span className="text-inktext">{entry.description}</span>{' '}
+                <span className="text-muted text-xs">
+                  · {new Date(entry.created_at).toLocaleString('fr-BE', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="max-w-2xl mx-auto space-y-4">
+      {!mode && (
+        <div className="bg-card border border-paperdark rounded-md p-6 text-center space-y-4">
+          <p className="text-muted text-sm">
+            Cet appareil n'est relié à aucune équipe. Les données restent alors uniquement sur cet
+            appareil (circuit fermé).
+          </p>
+          <div className="flex flex-col sm:flex-row gap-3 justify-center">
+            <button onClick={() => setMode('create')} className="toolbtn px-4 py-2.5 rounded bg-ink text-white font-medium">
+              Créer une équipe
+            </button>
+            <button onClick={() => setMode('join')} className="toolbtn px-4 py-2.5 rounded border border-paperdark font-medium">
+              Rejoindre une équipe
+            </button>
+          </div>
+        </div>
+      )}
+
+      {mode === 'create' && (
+        <form onSubmit={handleCreateTeam} className="bg-card border border-paperdark rounded-md p-6 space-y-3">
+          <p className="font-display text-lg font-semibold text-ink mb-2">Créer l'équipe</p>
+          <div>
+            <label className="text-xs font-medium text-muted block mb-1">Nom de l'équipe</label>
+            <input value={teamName} onChange={(e) => setTeamName(e.target.value)} placeholder="ex : Registre Réservations ASBL"
+              className="w-full border border-paperdark rounded px-3 py-2 text-sm" />
+          </div>
+          <div>
+            <label className="text-xs font-medium text-muted block mb-1">Mot de passe administrateur</label>
+            <input type="password" value={adminPassword} onChange={(e) => setAdminPassword(e.target.value)}
+              className="w-full border border-paperdark rounded px-3 py-2 text-sm" />
+          </div>
+          <div>
+            <label className="text-xs font-medium text-muted block mb-1">Votre prénom</label>
+            <input value={prenom} onChange={(e) => setPrenom(e.target.value)}
+              className="w-full border border-paperdark rounded px-3 py-2 text-sm" />
+          </div>
+          {error && <p className="text-xs text-brick">{error}</p>}
+          <div className="flex gap-2 justify-end pt-2">
+            <button type="button" onClick={() => setMode(null)} className="toolbtn px-3 py-2 rounded border border-paperdark text-sm">Annuler</button>
+            <button type="submit" disabled={busy} className="toolbtn px-4 py-2 rounded bg-ink text-white text-sm font-medium">
+              {busy ? 'Création...' : 'Créer l\'équipe'}
+            </button>
+          </div>
+        </form>
+      )}
+
+      {mode === 'join' && (
+        <form onSubmit={handleJoinTeam} className="bg-card border border-paperdark rounded-md p-6 space-y-3">
+          <p className="font-display text-lg font-semibold text-ink mb-2">Rejoindre une équipe</p>
+          <div>
+            <label className="text-xs font-medium text-muted block mb-1">Code reçu</label>
+            <input value={joinCode} onChange={(e) => setJoinCode(e.target.value)} placeholder="XXXX-XXXX"
+              className="w-full border border-paperdark rounded px-3 py-2 text-sm font-mono" />
+          </div>
+          <div>
+            <label className="text-xs font-medium text-muted block mb-1">Votre prénom</label>
+            <input value={prenom} onChange={(e) => setPrenom(e.target.value)}
+              className="w-full border border-paperdark rounded px-3 py-2 text-sm" />
+          </div>
+          <p className="text-xs text-muted">
+            ⚠ Le projet de l'équipe remplacera les données actuellement affichées sur cet appareil.
+          </p>
+          {error && <p className="text-xs text-brick">{error}</p>}
+          <div className="flex gap-2 justify-end pt-2">
+            <button type="button" onClick={() => setMode(null)} className="toolbtn px-3 py-2 rounded border border-paperdark text-sm">Annuler</button>
+            <button type="submit" disabled={busy} className="toolbtn px-4 py-2 rounded bg-ink text-white text-sm font-medium">
+              {busy ? 'Connexion...' : 'Rejoindre'}
+            </button>
+          </div>
+        </form>
+      )}
+    </div>
+  );
+}
+
+/* ============================= APP ============================= */
+
+function App() {
+  const [reservations, setReservations] = useState(() => {
+    try {
+      const raw = localStorage.getItem(STORAGE_KEY);
+      if (raw) { const parsed = JSON.parse(raw); if (Array.isArray(parsed)) return parsed; }
+    } catch (e) {}
+    return buildSeedReservations();
+  });
+  const [tab, setTab] = useState('nouvelle');
+  const jsonInputRef = useRef(null);
+  const excelInputRef = useRef(null);
+
+  const [fileHandle, setFileHandle] = useState(null);
+  const [fileLinkStatus, setFileLinkStatus] = useState(FS_SUPPORTED ? 'checking' : 'unsupported');
+  const [lastSavedAt, setLastSavedAt] = useState(null);
+
+  // ---- Synchronisation d'équipe ----
+  const [teamSession, setTeamSession] = useState(() => loadTeamSession());
+  const [activityLog, setActivityLog] = useState([]);
+  const [syncing, setSyncing] = useState(false);
+  const [syncError, setSyncError] = useState(null);
+  const skipNextPushRef = useRef(false);
+  const prevReservationsRef = useRef(null);
+  const realtimeChannelRef = useRef(null);
+
+  const canEdit = !teamSession || teamSession.role === 'edit';
+
+  function handleTeamJoined(session) {
+    saveTeamSession(session);
+    setTeamSession(session);
+  }
+  function handleLeaveTeam() {
+    if (realtimeChannelRef.current) {
+      supabaseClient.removeChannel(realtimeChannelRef.current);
+      realtimeChannelRef.current = null;
+    }
+    saveTeamSession(null);
+    setTeamSession(null);
+    setActivityLog([]);
+  }
+
+  // Au démarrage / changement d'équipe : charger les données de l'équipe et s'abonner au temps réel
+  useEffect(() => {
+    if (!teamSession || !supabaseClient) return;
+    let cancelled = false;
+    setSyncing(true);
+    setSyncError(null);
+
+    (async () => {
+      try {
+        const remote = await fetchTeamData(teamSession.teamId);
+        if (cancelled) return;
+        if (remote && Array.isArray(remote.data)) {
+          skipNextPushRef.current = true;
+          prevReservationsRef.current = remote.data;
+          setReservations(remote.data);
+        }
+        const log = await fetchActivityLog(teamSession.teamId);
+        if (!cancelled) setActivityLog(log);
+      } catch (err) {
+        if (!cancelled) setSyncError('Impossible de récupérer les données de l\'équipe : ' + (err.message || ''));
+      }
+      if (!cancelled) setSyncing(false);
+    })();
+
+    const channel = supabaseClient
+      .channel('team-' + teamSession.teamId)
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'team_data', filter: `team_id=eq.${teamSession.teamId}` }, (payload) => {
+        if (payload.new && Array.isArray(payload.new.data)) {
+          skipNextPushRef.current = true;
+          prevReservationsRef.current = payload.new.data;
+          setReservations(payload.new.data);
+        }
+      })
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'activity_log', filter: `team_id=eq.${teamSession.teamId}` }, (payload) => {
+        setActivityLog((prev) => [payload.new, ...prev].slice(0, 15));
+      })
+      .subscribe();
+    realtimeChannelRef.current = channel;
+
+    return () => {
+      cancelled = true;
+      if (realtimeChannelRef.current) {
+        supabaseClient.removeChannel(realtimeChannelRef.current);
+        realtimeChannelRef.current = null;
+      }
+    };
+  }, [teamSession && teamSession.teamId]);
+
+  // Pousser les changements locaux vers l'équipe (sauf si le changement vient lui-même du serveur)
+  useEffect(() => {
+    if (!teamSession || !supabaseClient) { prevReservationsRef.current = reservations; return; }
+    if (skipNextPushRef.current) {
+      skipNextPushRef.current = false;
+      return;
+    }
+    const description = describeReservationsDiff(prevReservationsRef.current, reservations);
+    prevReservationsRef.current = reservations;
+    setSyncing(true);
+    pushTeamData(teamSession.teamId, reservations, teamSession.prenom)
+      .then(() => pushActivityLog(teamSession.teamId, teamSession.prenom, description))
+      .catch((err) => setSyncError('Erreur de synchronisation : ' + (err.message || '')))
+      .finally(() => setSyncing(false));
+  }, [reservations]);
+
+  // Au démarrage : tenter de retrouver un fichier physique déjà lié (IndexedDB conserve le handle)
+  useEffect(() => {
+    if (!FS_SUPPORTED) return;
+    (async () => {
+      try {
+        const handle = await idbGet('reservationsFile');
+        if (!handle) { setFileLinkStatus('none'); return; }
+        const perm = await handle.queryPermission({ mode: 'readwrite' });
+        if (perm === 'granted') {
+          setFileHandle(handle);
+          setFileLinkStatus('linked');
+          const file = await handle.getFile();
+          const text = await file.text();
+          if (text && text.trim()) {
+            const data = JSON.parse(text);
+            if (Array.isArray(data)) setReservations(data);
+          }
+        } else {
+          setFileHandle(handle);
+          setFileLinkStatus('permission-needed');
+        }
+      } catch (e) { setFileLinkStatus('none'); }
+    })();
+  }, []);
+
+  // Sauvegarde automatique à chaque changement : toujours en localStorage (filet de sécurité),
+  // et sur le fichier physique lié si disponible.
+  useEffect(() => {
+    try { localStorage.setItem(STORAGE_KEY, JSON.stringify(reservations)); } catch (e) {}
+    if (fileHandle && fileLinkStatus === 'linked') {
+      writeReservationsToFile(fileHandle, reservations).then((ok) => { if (ok) setLastSavedAt(Date.now()); });
+    }
+  }, [reservations]);
+
+  async function handleLinkNewFile() {
+    try {
+      const handle = await window.showSaveFilePicker({
+        suggestedName: 'reservations-asbl.json',
+        types: [{ description: 'Fichier JSON', accept: { 'application/json': ['.json'] } }],
+      });
+      await idbSet('reservationsFile', handle);
+      setFileHandle(handle);
+      setFileLinkStatus('linked');
+      const ok = await writeReservationsToFile(handle, reservations);
+      if (ok) setLastSavedAt(Date.now());
+    } catch (e) {}
+  }
+  async function handleOpenExistingFile() {
+    try {
+      const [handle] = await window.showOpenFilePicker({
+        types: [{ description: 'Fichier JSON', accept: { 'application/json': ['.json'] } }],
+        multiple: false,
+      });
+      const perm = await handle.requestPermission({ mode: 'readwrite' });
+      if (perm !== 'granted') return;
+      await idbSet('reservationsFile', handle);
+      setFileHandle(handle);
+      setFileLinkStatus('linked');
+      const file = await handle.getFile();
+      const text = await file.text();
+      if (text && text.trim()) {
+        const data = JSON.parse(text);
+        if (Array.isArray(data)) setReservations(data);
+      }
+      setLastSavedAt(Date.now());
+    } catch (e) {}
+  }
+  async function handleReconnectFile() {
+    if (!fileHandle) return;
+    try {
+      const perm = await fileHandle.requestPermission({ mode: 'readwrite' });
+      if (perm === 'granted') {
+        setFileLinkStatus('linked');
+        const file = await fileHandle.getFile();
+        const text = await file.text();
+        if (text && text.trim()) {
+          const data = JSON.parse(text);
+          if (Array.isArray(data)) setReservations(data);
+        }
+      }
+    } catch (e) {}
+  }
+
+  function handleCreate(res) { setReservations((prev) => [...prev, res]); setTab('planning'); }
+  function handleTogglePaiement(id) {
+    setReservations((prev) => prev.map((r) => (r.id === id ? { ...r, paymentStatus: r.paymentStatus === 'paye' ? 'attente' : 'paye' } : r)));
+  }
+  function handleDelete(id) { setReservations((prev) => prev.filter((r) => r.id !== id)); }
+
+  function handleImportJSONFile(e) {
+    const file = e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (evt) => {
+      try {
+        const data = JSON.parse(evt.target.result);
+        if (Array.isArray(data)) setReservations(data);
+        else alert('Fichier JSON invalide.');
+      } catch (err) { alert('Fichier JSON invalide.'); }
+    };
+    reader.readAsText(file);
+    e.target.value = '';
+  }
+  function handleImportExcelFile(e) {
+    const file = e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (evt) => {
+      try {
+        const wb = XLSX.read(evt.target.result, { type: 'array' });
+        const sheet = wb.Sheets['_data'];
+        if (!sheet) { alert('Feuille "_data" introuvable — utilisez un fichier Excel exporté depuis cette application.'); return; }
+        const rows = XLSX.utils.sheet_to_json(sheet);
+        const restored = rows.map((r) => JSON.parse(r.json));
+        setReservations(restored);
+      } catch (err) { alert('Impossible de lire ce fichier Excel.'); }
+    };
+    reader.readAsArrayBuffer(file);
+    e.target.value = '';
+  }
+
+  const tabs = [
+    { id: 'nouvelle', label: 'Nouvelle demande' },
+    { id: 'planning', label: 'Planning' },
+    { id: 'materiel', label: 'Matériel' },
+    { id: 'liste', label: 'Réservations' },
+    { id: 'sync', label: teamSession ? '🔗 Synchronisation' : 'Synchronisation' },
+  ];
+
+  const contentReadOnly = !canEdit && tab !== 'sync';
+
+  return (
+    <div className="min-h-screen bg-paperdark">
+      <div className="bg-ink text-white">
+        <div className="max-w-6xl mx-auto px-4 sm:px-6 py-5 flex items-center justify-between flex-wrap gap-2">
+          <div>
+            <div className="font-display text-2xl font-semibold tracking-wide">Registre</div>
+            <div className="text-xs text-white/70">Réservations de locaux & matériel — gestion manuelle</div>
+          </div>
+          {teamSession && (
+            <div className="text-xs text-white/80 text-right">
+              <div>{teamSession.teamName}</div>
+              <div>{teamSession.prenom} · {teamSession.role === 'edit' ? 'modification' : 'consultation seule'}</div>
+            </div>
+          )}
+        </div>
+      </div>
+
+      <div className="bg-inkdark/95">
+        <div className="max-w-6xl mx-auto px-4 sm:px-6 flex gap-1 overflow-x-auto">
+          {tabs.map((t) => (
+            <button key={t.id} onClick={() => setTab(t.id)}
+              className={`ledger-tab ${tab === t.id ? 'active' : ''} px-5 py-2.5 text-sm font-medium rounded-t-md whitespace-nowrap ${tab === t.id ? 'text-ink' : 'text-white/70 hover:text-white'}`}>
+              {t.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="max-w-6xl mx-auto px-4 sm:px-6 pt-5">
+        <div className={`bg-card border border-paperdark rounded-md px-4 py-3 mb-5 text-xs text-inktext ${contentReadOnly ? 'pointer-events-none opacity-50' : ''}`}>
+          <div className="flex flex-wrap items-center gap-2">
+            {fileLinkStatus === 'unsupported' && (
+              <span className="text-muted">🔒 Ce navigateur ne permet pas de lier un fichier physique (fonctionne sur Chrome/Edge, ordinateur). Vos données sont sauvegardées automatiquement dans ce navigateur. Utilisez Exporter pour transférer vers votre smartphone.</span>
+            )}
+            {fileLinkStatus === 'checking' && <span className="text-muted">Vérification de la sauvegarde…</span>}
+            {fileLinkStatus === 'none' && (
+              <>
+                <span className="text-muted">💾 Données sauvegardées dans ce navigateur. Pour une sauvegarde plus sûre sur un vrai fichier de votre laptop :</span>
+                <button onClick={handleLinkNewFile} className="toolbtn px-2.5 py-1 rounded bg-ink text-white font-medium">🔗 Créer un fichier de sauvegarde</button>
+                <button onClick={handleOpenExistingFile} className="toolbtn px-2.5 py-1 rounded border border-paperdark font-medium">📂 Lier un fichier existant</button>
+              </>
+            )}
+            {fileLinkStatus === 'linked' && (
+              <>
+                <span className="text-forestdark font-medium">🔗 Sauvegarde automatique active{fileHandle?.name ? ` — ${fileHandle.name}` : ''}</span>
+                {lastSavedAt && <span className="text-muted">· enregistré {new Date(lastSavedAt).toLocaleTimeString('fr-BE')}</span>}
+                <button onClick={handleLinkNewFile} className="toolbtn px-2.5 py-1 rounded border border-paperdark font-medium ml-auto">Changer de fichier</button>
+              </>
+            )}
+            {fileLinkStatus === 'permission-needed' && (
+              <>
+                <span className="text-amberdark font-medium">⚠ Autorisation requise pour reprendre la sauvegarde sur {fileHandle?.name}.</span>
+                <button onClick={handleReconnectFile} className="toolbtn px-2.5 py-1 rounded bg-amber text-white font-medium">Reconnecter</button>
+              </>
+            )}
+          </div>
+          <div className="flex flex-wrap items-center gap-2 mt-2 pt-2 border-t border-paperdark/70">
+            <span className="text-muted font-semibold">Exporter :</span>
+            <button onClick={() => exportJSON(reservations)} className="toolbtn px-2 py-1 rounded border border-paperdark">JSON</button>
+            <button onClick={() => exportExcel(reservations)} className="toolbtn px-2 py-1 rounded border border-paperdark">Excel</button>
+            <button onClick={() => exportPDF(reservations)} className="toolbtn px-2 py-1 rounded border border-paperdark">PDF</button>
+            <button onClick={() => exportWord(reservations)} className="toolbtn px-2 py-1 rounded border border-paperdark">Word</button>
+            <span className="text-muted font-semibold ml-3">Importer :</span>
+            <button onClick={() => jsonInputRef.current.click()} className="toolbtn px-2 py-1 rounded border border-paperdark">JSON</button>
+            <button onClick={() => excelInputRef.current.click()} className="toolbtn px-2 py-1 rounded border border-paperdark">Excel</button>
+            <input type="file" accept="application/json" ref={jsonInputRef} onChange={handleImportJSONFile} className="hidden" />
+            <input type="file" accept=".xlsx" ref={excelInputRef} onChange={handleImportExcelFile} className="hidden" />
+            <span className="text-muted text-[11px] ml-2">(PDF/Word : rapports imprimables — Excel/JSON : sauvegardes réutilisables)</span>
+          </div>
+        </div>
+      </div>
+
+      <div className={`max-w-6xl mx-auto px-4 sm:px-6 pb-8 ${contentReadOnly ? 'pointer-events-none opacity-60 select-none' : ''}`}>
+        {tab === 'nouvelle' && <NewReservationForm reservations={reservations} onCreate={handleCreate} />}
+        {tab === 'planning' && <PlanningView reservations={reservations} />}
+        {tab === 'materiel' && <MaterielView reservations={reservations} />}
+        {tab === 'liste' && <ReservationsListView reservations={reservations} onTogglePaiement={handleTogglePaiement} onDelete={handleDelete} />}
+      </div>
+      {tab === 'sync' && (
+        <div className="max-w-6xl mx-auto px-4 sm:px-6 pb-8">
+          <SyncView
+            teamSession={teamSession}
+            onTeamJoined={handleTeamJoined}
+            onLeaveTeam={handleLeaveTeam}
+            activityLog={activityLog}
+            syncing={syncing}
+            syncError={syncError}
+          />
+        </div>
+      )}
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('service-worker.js').catch(() => {});
+  });
+}
+
+</script>
+</body>
+</html>
