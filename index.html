@@ -179,50 +179,50 @@ function saveTeamSession(session) {
 async function createTeamOnServer(teamName, prenom) {
   const editCode = generateTeamCode();
   const viewCode = generateTeamCode();
-  const { data: team, error } = await supabaseClient
-    .from('teams')
-    .insert({ name: teamName || 'Équipe', edit_code: editCode, view_code: viewCode, created_by: prenom })
-    .select()
-    .single();
+  const { data: team, error } = await supabaseClient.rpc('creer_equipe_securisee', {
+    p_name: teamName || 'Équipe', p_edit_code: editCode, p_view_code: viewCode, p_created_by: prenom
+  });
   if (error) throw error;
   return team;
 }
 
 async function findTeamByCode(code) {
   const cleanCode = code.trim().toUpperCase();
-  const { data: byEdit } = await supabaseClient.from('teams').select('*').eq('edit_code', cleanCode).maybeSingle();
-  if (byEdit) return { team: byEdit, role: 'edit' };
-  const { data: byView } = await supabaseClient.from('teams').select('*').eq('view_code', cleanCode).maybeSingle();
-  if (byView) return { team: byView, role: 'view' };
-  return null;
+  const { data, error } = await supabaseClient.rpc('rejoindre_equipe_securisee', { p_code: cleanCode });
+  if (error) throw error;
+  if (!data) return null;
+  return {
+    team: { id: data.id, name: data.name, edit_code: data.edit_code, view_code: data.view_code },
+    role: data.role
+  };
 }
 
-async function fetchTeamData(teamId) {
-  const { data, error } = await supabaseClient.from('team_data').select('*').eq('team_id', teamId).maybeSingle();
+async function fetchTeamData(teamId, code) {
+  const { data, error } = await supabaseClient.rpc('recuperer_donnees_equipe_securise', {
+    p_team_id: teamId, p_code: code
+  });
   if (error) throw error;
   return data;
 }
 
-async function pushTeamData(teamId, reservations, prenom) {
-  const { error } = await supabaseClient
-    .from('team_data')
-    .upsert({ team_id: teamId, data: reservations, updated_by: prenom }, { onConflict: 'team_id' });
+async function pushTeamData(teamId, code, reservations, prenom) {
+  const { data: ok, error } = await supabaseClient.rpc('sauvegarder_donnees_equipe_securise', {
+    p_team_id: teamId, p_code: code, p_data: reservations, p_updated_by: prenom
+  });
   if (error) throw error;
+  return ok;
 }
 
-async function pushActivityLog(teamId, prenom, description) {
+async function pushActivityLog(teamId, code, prenom, description) {
   try {
-    await supabaseClient.from('activity_log').insert({ team_id: teamId, author_name: prenom, description });
+    await supabaseClient.rpc('ajouter_activite_securise', {
+      p_team_id: teamId, p_code: code, p_author_name: prenom, p_description: description
+    });
   } catch (e) {}
 }
 
-async function fetchActivityLog(teamId) {
-  const { data } = await supabaseClient
-    .from('activity_log')
-    .select('*')
-    .eq('team_id', teamId)
-    .order('created_at', { ascending: false })
-    .limit(15);
+async function fetchActivityLog(teamId, code) {
+  const { data } = await supabaseClient.rpc('recuperer_journal_securise', { p_team_id: teamId, p_code: code });
   return data || [];
 }
 
@@ -1469,7 +1469,7 @@ function SyncView({ teamSession, onTeamJoined, onLeaveTeam, activityLog, syncing
     setBusy(true);
     try {
       const team = await createTeamOnServer(teamName.trim(), prenom.trim());
-      await pushTeamData(team.id, [], prenom.trim());
+      await pushTeamData(team.id, team.edit_code, [], prenom.trim());
       const session = { teamId: team.id, role: 'edit', prenom: prenom.trim(), teamName: team.name, editCode: team.edit_code, viewCode: team.view_code };
       onTeamJoined(session);
     } catch (err) {
@@ -1710,51 +1710,45 @@ function App() {
     setActivityLog([]);
   }
 
-  // Au démarrage / changement d'équipe : charger les données de l'équipe et s'abonner au temps réel
+  // Au démarrage / changement d'équipe : charger les données de l'équipe et démarrer
+  // l'actualisation périodique sécurisée (remplace le temps réel, qui exigeait une
+  // lecture ouverte à tous côté base de données). Chaque actualisation redemande les
+  // données EN FOURNISSANT le code — le serveur refuse de répondre si le code n'est
+  // plus valide. Léger délai (jusqu'à 20s) au lieu d'une mise à jour instantanée, en
+  // échange d'une vraie fermeture de la lecture à qui n'a pas le code.
   useEffect(() => {
     if (!teamSession || !supabaseClient) return;
     let cancelled = false;
-    setSyncing(true);
-    setSyncError(null);
+    const codeAUtiliser = teamSession.editCode || teamSession.viewCode;
 
-    (async () => {
+    async function chargerDonnees() {
       try {
-        const remote = await fetchTeamData(teamSession.teamId);
+        const remote = await fetchTeamData(teamSession.teamId, codeAUtiliser);
         if (cancelled) return;
         if (remote && Array.isArray(remote.data)) {
           skipNextPushRef.current = true;
           prevReservationsRef.current = remote.data;
           setReservations(remote.data);
         }
-        const log = await fetchActivityLog(teamSession.teamId);
+        const log = await fetchActivityLog(teamSession.teamId, codeAUtiliser);
         if (!cancelled) setActivityLog(log);
       } catch (err) {
         if (!cancelled) setSyncError('Impossible de récupérer les données de l\'équipe : ' + (err.message || ''));
       }
       if (!cancelled) setSyncing(false);
-    })();
+    }
 
-    const channel = supabaseClient
-      .channel('team-' + teamSession.teamId)
-      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'team_data', filter: `team_id=eq.${teamSession.teamId}` }, (payload) => {
-        if (payload.new && Array.isArray(payload.new.data)) {
-          skipNextPushRef.current = true;
-          prevReservationsRef.current = payload.new.data;
-          setReservations(payload.new.data);
-        }
-      })
-      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'activity_log', filter: `team_id=eq.${teamSession.teamId}` }, (payload) => {
-        setActivityLog((prev) => [payload.new, ...prev].slice(0, 15));
-      })
-      .subscribe();
-    realtimeChannelRef.current = channel;
+    setSyncing(true);
+    setSyncError(null);
+    chargerDonnees();
+
+    const intervalId = setInterval(() => {
+      if (!cancelled) chargerDonnees();
+    }, 20000);
 
     return () => {
       cancelled = true;
-      if (realtimeChannelRef.current) {
-        supabaseClient.removeChannel(realtimeChannelRef.current);
-        realtimeChannelRef.current = null;
-      }
+      clearInterval(intervalId);
     };
   }, [teamSession && teamSession.teamId]);
 
@@ -1768,8 +1762,11 @@ function App() {
     const description = describeReservationsDiff(prevReservationsRef.current, reservations);
     prevReservationsRef.current = reservations;
     setSyncing(true);
-    pushTeamData(teamSession.teamId, reservations, teamSession.prenom)
-      .then(() => pushActivityLog(teamSession.teamId, teamSession.prenom, description))
+    pushTeamData(teamSession.teamId, teamSession.editCode, reservations, teamSession.prenom)
+      .then((ok) => {
+        if (!ok) { setSyncError("Sauvegarde refusée : code d'édition invalide ou manquant."); return; }
+        return pushActivityLog(teamSession.teamId, teamSession.editCode, teamSession.prenom, description);
+      })
       .catch((err) => setSyncError('Erreur de synchronisation : ' + (err.message || '')))
       .finally(() => setSyncing(false));
   }, [reservations]);
